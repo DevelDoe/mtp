@@ -89,8 +89,7 @@ dump*
 # My custom Files
 # ----------------------------------------
 build.txt
-readme.txt
-temp.js
+temp.*
 
 
 mongoose/
