@@ -1,8 +1,6 @@
 #include "mongoose.h"
 #include <stdio.h>
 #include <json-c/json.h>
-#include <string.h>
-#include <stdlib.h>
 
 /* ---------------------------- Configuration ------------------------------ */
 static const char *s_listen_url = "http://0.0.0.0:8000";
@@ -71,10 +69,7 @@ static void handle_ws_upgrade(struct mg_connection *c, struct mg_http_message *h
 static void handle_scanner_update(struct mg_connection *c, struct mg_http_message *hm) {
     printf("[SERVER] Received symbol update request\n");
 
-    struct mg_str body_copy = mg_strdup_nul(hm->body);
-    struct json_object *root = json_tokener_parse(body_copy.ptr);
-    mg_free((void *)body_copy.ptr);
-
+    struct json_object *root = json_tokener_parse(hm->body.ptr);
     struct json_object *client_id_obj, *data_obj;
 
     if (!root || !json_object_object_get_ex(root, "client_id", &client_id_obj) ||
@@ -108,11 +103,9 @@ static void handle_scanner_update(struct mg_connection *c, struct mg_http_messag
 
 /* ---------------------- WebSocket Handlers ------------------------------- */
 static void handle_ws_message(struct mg_connection *c, struct mg_ws_message *wm) {
-    struct mg_str data_copy = mg_strdup_nul(wm->data);
-    printf("[SERVER] Received WebSocket message: %s\n", data_copy.ptr);
-    struct json_object *root = json_tokener_parse(data_copy.ptr);
-    mg_free((void *)data_copy.ptr);
+    printf("[SERVER] Received WebSocket message: %.*s\n", (int)wm->data.len, wm->data.ptr);
 
+    struct json_object *root = json_tokener_parse(wm->data.ptr);
     struct json_object *client_id_obj, *data_obj;
 
     if (!root || !json_object_object_get_ex(root, "client_id", &client_id_obj)) {
@@ -145,35 +138,47 @@ static void event_handler(struct mg_connection *c, int ev, void *ev_data) {
         case MG_EV_HTTP_MSG: {
             struct mg_http_message *hm = (struct mg_http_message *) ev_data;
 
-            if (mg_http_uri_match(&hm->uri, "/")) {
+            if (mg_http_match_uri(hm, "/")) {
                 handle_root(c);
-            } else if (mg_http_uri_match(&hm->uri, "/ws")) {
+            } else if (mg_http_match_uri(hm, "/ws")) {
                 handle_ws_upgrade(c, hm);
-            } else if (mg_http_uri_match(&hm->uri, "/update-scanner-symbols")) {
+            } else if (mg_http_match_uri(hm, "/update-scanner-symbols")) {
                 handle_scanner_update(c, hm);
             } else {
-                printf("[SERVER] Received request for unknown endpoint\n");
+                printf("[SERVER] Received request for unknown endpoint: %.*s\n", (int)hm->uri.len, hm->uri.ptr);
                 mg_http_reply(c, 404, NULL, "Not Found");
             }
             break;
         }
 
-        case MG_EV_WS_MSG:
-            handle_ws_message(c, (struct mg_ws_message *) ev_data);
+        case MG_EV_WS_MSG: {
+            struct mg_ws_message *wm = (struct mg_ws_message *) ev_data;
+            handle_ws_message(c, wm);
+            break;
+        }
+
+        case MG_EV_WS_OPEN:
+            printf("[SERVER] WebSocket connection opened\n");
             break;
 
         case MG_EV_CLOSE:
-            remove_client(c);
+            if (c->is_websocket) {
+                printf("[SERVER] WebSocket connection closed\n");
+                remove_client(c);
+            }
             break;
     }
 }
 
+/* ---------------------------- Main Function ------------------------------ */
 int main(void) {
     struct mg_mgr mgr;
     mg_mgr_init(&mgr);
     mg_http_listen(&mgr, s_listen_url, event_handler, NULL);
     printf("[SERVER] Server started on %s\n", s_listen_url);
+
     while (true) mg_mgr_poll(&mgr, 1000);
+
     mg_mgr_free(&mgr);
     return 0;
 }
