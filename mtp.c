@@ -1,4 +1,4 @@
-#include "mongoose.h"
+struct json_object *root = json_tokener_parse(mg_strdup_nul(wm->data).ptr);if (mg_http_uri_match(&hm->uri, "/")) {#include "mongoose.h"
 #include <stdio.h>
 #include <json-c/json.h>
 
@@ -69,7 +69,8 @@ static void handle_ws_upgrade(struct mg_connection *c, struct mg_http_message *h
 static void handle_scanner_update(struct mg_connection *c, struct mg_http_message *hm) {
     printf("[SERVER] Received symbol update request\n");
 
-    struct json_object *root = json_tokener_parse(mg_straddr(hm->body));
+    struct json_object *root = json_tokener_parse(mg_strdup_nul(hm->body).ptr);
+
     struct json_object *client_id_obj, *data_obj;
 
     if (!root || !json_object_object_get_ex(root, "client_id", &client_id_obj) ||
@@ -104,7 +105,7 @@ static void handle_scanner_update(struct mg_connection *c, struct mg_http_messag
 /* ---------------------- WebSocket Handlers ------------------------------- */
 static void handle_ws_message(struct mg_connection *c, struct mg_ws_message *wm) {
   printf("[SERVER] Received WebSocket message: %.*s\n", (int)wm->data.len, mg_straddr(wm->data));
-  struct json_object *root = json_tokener_parse(mg_straddr(wm->data));
+  struct json_object *root = json_tokener_parse(mg_strdup_nul(wm->data).ptr);
 
     struct json_object *client_id_obj, *data_obj;
 
@@ -142,7 +143,7 @@ static void event_handler(struct mg_connection *c, int ev, void *ev_data) {
                 handle_root(c);
             } else if (mg_http_match_uri(hm, "/ws")) {
                 handle_ws_upgrade(c, hm);
-            } else if (mg_http_match_uri(hm, "/update-scanner-symbols")) {
+            } else if (mg_http_uri_match(&hm->uri, "/update-scanner-symbols")) {
                 handle_scanner_update(c, hm);
             } else {
               printf("[SERVER] Received request for unknown endpoint: %.*s\n", (int)hm->uri.len, mg_straddr(hm->uri));
