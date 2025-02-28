@@ -21,7 +21,7 @@ void log_message(const char* message) {
 }
 
 /* ----------------------------- Configuration ------------------------------ */
-#define DEBUG_MODE 0
+#define DEBUG_MODE 1
 #define MAX_SYMBOLS 50
 #define PRICE_MOVEMENT 1.0  // 1% price movement
 #define DEBOUNCE_TIME 3000  // 3 seconds in milliseconds
