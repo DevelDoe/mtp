@@ -4,48 +4,25 @@
 #include <time.h>  // Include for time functions
 
 /* ---------------------------- Configuration ------------------------------ */
-
-static const char *s_listen_url = "http://0.0.0.0:8000";
+static const char *s_listen_url = "http://0.0.0.0:8000";  // HTTP endpoint for symbol updates
 #define SCANNER_TIMEOUT 60  // 60 seconds before removing inactive scanners
 
 /* -------------------------- Client Management ---------------------------- */
-
 typedef struct ClientNode {
     char client_id[32];
     struct mg_connection *conn;
-    int is_scanner;
+    int is_scanner;  // 1 if the client is a scanner, 0 otherwise
     time_t last_seen;  // New field for heartbeat tracking
     struct ClientNode *next;
 } ClientNode;
 
 static ClientNode *client_map = NULL;
 
-/* Function Prototypes */
-static ClientNode *find_client(const char *client_id);
-
-/* -------------------------- Function Definitions ------------------------- */
-
-static ClientNode *find_client(const char *client_id) {
-    ClientNode *curr = client_map;
-    while (curr) {
-        if (strcmp(curr->client_id, client_id) == 0) {
-            return curr;
-        }
-        curr = curr->next;
-    }
-    return NULL;
-}
-
 static void add_client(const char *client_id, struct mg_connection *conn) {
-    if (find_client(client_id)) {
-        printf("[SERVER] Client %s is already registered.\n", client_id);
-        return;
-    }
-
     ClientNode *node = malloc(sizeof(ClientNode));
     snprintf(node->client_id, sizeof(node->client_id), "%s", client_id);
     node->conn = conn;
-    node->is_scanner = strncmp(client_id, "ss", 2) == 0 ? 1 : 0;
+    node->is_scanner = (strncmp(client_id, "ss", 2) == 0);  // Identify if scanner based on client_id
     node->last_seen = time(NULL);
     node->next = client_map;
     client_map = node;
@@ -58,13 +35,6 @@ static void remove_client(struct mg_connection *conn) {
         if ((*curr)->conn == conn) {
             ClientNode *tmp = *curr;
             *curr = (*curr)->next;
-
-            if (tmp->conn) {
-                mg_ws_send(tmp->conn, "{\"error\":\"Client disconnected\"}", 30, WEBSOCKET_OP_TEXT);
-                mg_close_conn(tmp->conn);  // Proper way to close a connection
-                tmp->conn = NULL;
-            }
-
             free(tmp);
             printf("[SERVER] Removed client\n");
             return;
@@ -73,132 +43,134 @@ static void remove_client(struct mg_connection *conn) {
     }
 }
 
-static void remove_inactive_scanners() {
-    time_t now = time(NULL);
-    ClientNode **curr = &client_map;
+static ClientNode *find_client(const char *client_id) {
+    ClientNode *curr = client_map;
+    while (curr) {
+        if (strcmp(curr->client_id, client_id) == 0) {
+            return curr;
+        }
+        curr = curr->next;
+    }
+    return NULL;
+}
 
-    while (*curr) {
-        if ((*curr)->is_scanner && (now - (*curr)->last_seen > SCANNER_TIMEOUT)) {
-            printf("[SERVER] Removing inactive scanner: %s\n", (*curr)->client_id);
-
-            ClientNode *tmp = *curr;
-            *curr = (*curr)->next;
-
-            if (tmp->conn) {
-                mg_ws_send(tmp->conn, "{\"error\":\"Scanner timeout\"}", 27, WEBSOCKET_OP_TEXT);
-                mg_close_conn(tmp->conn);
-                tmp->conn = NULL;
-            }
-
-            free(tmp);
-        } else {
-            curr = &(*curr)->next;
+/* ------------------------ WebSocket Utilities ---------------------------- */
+static void broadcast_alert(const char *alert_data) {
+    printf("[SERVER] Broadcasting alert to all clients: %s\n", alert_data);
+    for (ClientNode *curr = client_map; curr; curr = curr->next) {
+        if (strcmp(curr->client_id, "scanner") != 0) {
+            printf("[SERVER] Sending alert to client: %s\n", curr->client_id);
+            mg_ws_send(curr->conn, alert_data, strlen(alert_data), WEBSOCKET_OP_TEXT);
         }
     }
 }
 
 /* ------------------------- HTTP Handlers ---------------------------------- */
 
+// Root endpoint handler to test server status
+static void handle_root(struct mg_connection *c) {
+    printf("[SERVER] Received request for root endpoint\n");
+    mg_http_reply(c, 200, "Content-Type: application/json\r\n", "{\"status\": \"Server is running\"}");
+}
+
+// WebSocket upgrade handler
+static void handle_ws_upgrade(struct mg_connection *c, struct mg_http_message *hm) {
+    printf("[SERVER] Upgrading connection to WebSocket\n");
+    mg_ws_upgrade(c, hm, NULL);
+}
+
+// Handler for symbol update requests from HTTP clients
 static void handle_scanner_update(struct mg_connection *c, struct mg_http_message *hm) {
     printf("[SERVER] Received symbol update request\n");
 
     struct json_object *root = json_tokener_parse(hm->body.ptr);
-    struct json_object *client_id_obj, *symbols_array;
+    struct json_object *client_id_obj, *data_obj;
 
-    if (!root || !json_object_object_get_ex(root, "client_id", &client_id_obj) ||
-               !json_object_object_get_ex(root, "symbols", &symbols_array)) {
+    if (!root || !json_object_object_get_ex(root, "client_id", &client_id_obj) || !json_object_object_get_ex(root, "data", &data_obj)) {
         printf("[SERVER] Invalid symbol update request format\n");
-        mg_http_reply(c, 400, "Content-Type: application/json\r\n",
-                     "{\"error\": \"Invalid request format\"}");
+        mg_http_reply(c, 400, "Content-Type: application/json\r\n", "{\"error\": \"Invalid request format\"}");
         json_object_put(root);
         return;
     }
 
     const char *client_id = json_object_get_string(client_id_obj);
-    int num_symbols = json_object_array_length(symbols_array);
+    const char *data = json_object_to_json_string(data_obj);
 
-    printf("[SERVER] Received %d symbols from %s\n", num_symbols, client_id);
+    printf("[SERVER] Received symbols from client %s: %s\n", client_id, data);
 
-    if (num_symbols == 0) {
-        printf("[SERVER] No symbols to assign\n");
-        mg_http_reply(c, 200, NULL, "No symbols to assign.");
-        json_object_put(root);
-        return;
+    // Find a scanner client and forward the symbol data
+    ClientNode *scanner = find_client("ss1");  // Default to a scanner named "ss1"
+    if (scanner) {
+        printf("[SERVER] Forwarding symbols to scanner\n");
+        mg_ws_send(scanner->conn, data, strlen(data), WEBSOCKET_OP_TEXT);
+        mg_http_reply(c, 200, NULL, "Symbols forwarded to scanner");
+    } else {
+        printf("[SERVER] No active scanner available\n");
+        mg_http_reply(c, 503, "Content-Type: application/json\r\n", "{\"error\": \"Scanner offline\"}");
     }
 
-    ClientNode *scanner_node = find_client("ss1");
-    struct mg_connection *scanner = scanner_node ? scanner_node->conn : NULL;
-
-    if (!scanner) {
-        printf("[SERVER] No active scanners available\n");
-        mg_http_reply(c, 503, "Content-Type: application/json\r\n",
-                     "{\"error\": \"No active scanner shards available\"}");
-        json_object_put(root);
-        return;
-    }
-
-    printf("[SERVER] Sending symbols to scanner\n");
-    mg_ws_send(scanner, json_object_to_json_string(symbols_array),
-               strlen(json_object_to_json_string(symbols_array)), WEBSOCKET_OP_TEXT);
-
-    mg_http_reply(c, 200, NULL, "Symbols distributed.");
     json_object_put(root);
 }
 
-/* ------------------------- WebSocket Handlers ---------------------------- */
-
+/* ---------------------- WebSocket Handlers ------------------------------- */
 static void handle_ws_message(struct mg_connection *c, struct mg_ws_message *wm) {
     printf("[SERVER] Received WebSocket message: %.*s\n", (int)wm->data.len, wm->data.ptr);
 
     struct json_object *root = json_tokener_parse(wm->data.ptr);
-    struct json_object *client_id_obj, *type_obj;
+    struct json_object *client_id_obj, *data_obj;
 
     if (!root || !json_object_object_get_ex(root, "client_id", &client_id_obj)) {
         printf("[SERVER] Invalid WebSocket message format\n");
-        json_object_put(root);
         return;
     }
 
     const char *client_id = json_object_get_string(client_id_obj);
-    ClientNode *client = find_client(client_id);
 
-    if (!client) {
-        printf("[SERVER] Registering new WebSocket client: %s\n", client_id);
+    // Register new clients (except scanner which connects via HTTP first)
+    if (!find_client(client_id)) {
+        printf("[SERVER] Registering new client: %s\n", client_id);
         add_client(client_id, c);
-        client = find_client(client_id);
     }
 
-    // Handle heartbeat messages
-    if (json_object_object_get_ex(root, "type", &type_obj)) {
-        const char *type = json_object_get_string(type_obj);
-        if (strcmp(type, "heartbeat") == 0) {
-            client->last_seen = time(NULL);
-            printf("[SERVER] Heartbeat received from %s\n", client_id);
-        }
+    // Handle scanner alerts
+    if (strcmp(client_id, "scanner") == 0 && json_object_object_get_ex(root, "data", &data_obj)) {
+        const char *alert = json_object_to_json_string(data_obj);
+        printf("[SERVER] Received alert from scanner: %s\n", alert);
+        broadcast_alert(alert);
     }
 
     json_object_put(root);
 }
 
 /* ------------------------- Event Handling -------------------------------- */
-
 static void event_handler(struct mg_connection *c, int ev, void *ev_data) {
     switch (ev) {
         case MG_EV_HTTP_MSG: {
             struct mg_http_message *hm = (struct mg_http_message *) ev_data;
-            if (mg_http_match_uri(hm, "/update-scanner-symbols")) {
+
+            if (mg_http_match_uri(hm, "/")) {
+                handle_root(c);
+            } else if (mg_http_match_uri(hm, "/ws")) {
+                handle_ws_upgrade(c, hm);
+            } else if (mg_http_match_uri(hm, "/update-scanner-symbols")) {
                 handle_scanner_update(c, hm);
             } else {
+                printf("[SERVER] Received request for unknown endpoint: %.*s\n", (int)hm->uri.len, hm->uri.ptr);
                 mg_http_reply(c, 404, NULL, "Not Found");
             }
             break;
         }
+
+        case MG_EV_WS_MSG: {
+            struct mg_ws_message *wm = (struct mg_ws_message *) ev_data;
+            handle_ws_message(c, wm);
+            break;
+        }
+
         case MG_EV_WS_OPEN:
             printf("[SERVER] WebSocket connection opened\n");
             break;
-        case MG_EV_WS_MSG:
-            handle_ws_message(c, (struct mg_ws_message *) ev_data);
-            break;
+
         case MG_EV_CLOSE:
             if (c->is_websocket) {
                 printf("[SERVER] WebSocket connection closed\n");
@@ -209,20 +181,14 @@ static void event_handler(struct mg_connection *c, int ev, void *ev_data) {
 }
 
 /* ---------------------------- Main Function ------------------------------ */
-
 int main(void) {
     struct mg_mgr mgr;
     mg_mgr_init(&mgr);
-    struct mg_connection *conn = mg_http_listen(&mgr, s_listen_url, event_handler, NULL);
-    if (conn == NULL) {
-        printf("[SERVER] Failed to start server on %s\n", s_listen_url);
-        return 1;
-    }
+    mg_http_listen(&mgr, s_listen_url, event_handler, NULL);
     printf("[SERVER] Server started on %s\n", s_listen_url);
 
     while (true) {
         mg_mgr_poll(&mgr, 1000);
-        remove_inactive_scanners();
     }
 
     mg_mgr_free(&mgr);
