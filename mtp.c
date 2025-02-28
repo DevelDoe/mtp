@@ -213,7 +213,11 @@ static void event_handler(struct mg_connection *c, int ev, void *ev_data) {
 int main(void) {
     struct mg_mgr mgr;
     mg_mgr_init(&mgr);
-    mg_http_listen(&mgr, s_listen_url, event_handler, NULL);
+    struct mg_connection *conn = mg_http_listen(&mgr, s_listen_url, event_handler, NULL);
+    if (conn == NULL) {
+        printf("[SERVER] Failed to start server on %s\n", s_listen_url);
+        return 1;
+    }
     printf("[SERVER] Server started on %s\n", s_listen_url);
 
     while (true) {
