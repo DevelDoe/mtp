@@ -7,6 +7,14 @@ static const char *s_listen_url = "http://0.0.0.0:8000";
 #define MAX_SYMBOLS_PER_BATCH 50
 
 /* -------------------------- Client Management ---------------------------- */
+typedef struct ScannerNode {
+    char client_id[32];
+    struct mg_connection *conn;
+    struct ScannerNode *next;
+} ScannerNode;
+
+static ScannerNode *scanner_list = NULL;
+
 typedef struct ClientNode {
     char client_id[32];
     struct mg_connection *conn;
@@ -44,6 +52,36 @@ static struct mg_connection *find_client(const char *client_id) {
     return curr ? curr->conn : NULL;
 }
 
+static void add_scanner(const char *client_id, struct mg_connection *conn) {
+    ScannerNode *curr = scanner_list;
+
+    // Check if scanner already exists
+    while (curr) {
+        if (strcmp(curr->client_id, client_id) == 0) {
+            // Existing scanner reconnecting
+            curr->conn = conn;
+            printf("[SERVER] Scanner %s reconnected\n", client_id);
+            return;
+        }
+        curr = curr->next;
+    }
+
+    // New scanner, add to list
+    ScannerNode *new_scanner = (ScannerNode *)malloc(sizeof(ScannerNode));
+    snprintf(new_scanner->client_id, sizeof(new_scanner->client_id), "%s", client_id);
+    new_scanner->conn = conn;
+    new_scanner->next = scanner_list;
+    scanner_list = new_scanner;
+    printf("[SERVER] Registered new scanner: %s\n", client_id);
+
+    // Reassign symbols to all scanners
+    if (total_symbols > 0) {
+        distribute_symbols_to_scanners(all_symbols, total_symbols);
+    }
+}
+
+
+
 /* ------------------------ WebSocket Utilities ---------------------------- */
 static void send_symbols_to_scanner(struct mg_connection *scanner, const char **symbols, int num_symbols) {
     // Create a JSON object containing the symbols
@@ -74,28 +112,29 @@ static void broadcast_alert(const char *alert_data) {
 }
 
 static void distribute_symbols_to_scanners(const char **symbols, int total_symbols) {
-    int batch_count = (total_symbols + MAX_SYMBOLS_PER_BATCH - 1) / MAX_SYMBOLS_PER_BATCH;  // Calculate number of batches
-    int i = 0;
-    ClientNode *curr = client_map;
+    ScannerNode *curr = scanner_list;
+    int symbol_index = 0;
 
-    while (curr && i < batch_count) {
-        // Calculate the current batch size
-        const char **batch = &symbols[i * MAX_SYMBOLS_PER_BATCH];
-        int batch_size = (total_symbols - i * MAX_SYMBOLS_PER_BATCH < MAX_SYMBOLS_PER_BATCH) ? (total_symbols - i * MAX_SYMBOLS_PER_BATCH) : MAX_SYMBOLS_PER_BATCH;
+    printf("[SERVER] Reassigning symbols to all scanners\n");
 
-        // Send this batch of symbols to the current scanner
-        send_symbols_to_scanner(curr->conn, batch, batch_size);
+    while (curr && symbol_index < total_symbols) {
+        int batch_size = (total_symbols - symbol_index < MAX_SYMBOLS_PER_BATCH)
+                         ? (total_symbols - symbol_index)
+                         : MAX_SYMBOLS_PER_BATCH;
 
-        // Move to the next scanner
-        curr = curr->next;
-        i++;
+        send_symbols_to_scanner(curr->conn, &symbols[symbol_index], batch_size);
+        symbol_index += batch_size;
+        curr = curr->next;  // Move to next scanner
     }
 
-    // If there are more batches than scanners, discard the rest
-    if (i < batch_count) {
-        printf("[SERVER] Not enough scanners for the remaining symbols\n");
+    if (symbol_index < total_symbols) {
+        printf("[SERVER] Not enough scanners for all symbols. %d symbols unassigned.\n",
+               total_symbols - symbol_index);
+    } else {
+        printf("[SERVER] All symbols assigned successfully.\n");
     }
 }
+
 
 /* ------------------------- HTTP Handlers ---------------------------------- */
 static void handle_root(struct mg_connection *c) {
@@ -157,10 +196,16 @@ static void handle_ws_message(struct mg_connection *c, struct mg_ws_message *wm)
 
     const char *client_id = json_object_get_string(client_id_obj);
 
-    // Register new clients (except scanner which connects via HTTP first)
-    if (!find_client(client_id)) {
-        printf("[SERVER] Registering new client: %s\n", client_id);
-        add_client(client_id, c);
+    // Normal client registration (non-scanners)
+    if (strncmp(client_id, "scanner", 7) != 0) {
+        if (!find_client(client_id)) {
+            printf("[SERVER] Registering new client: %s\n", client_id);
+            add_client(client_id, c);
+        }
+    } else {
+        // Scanner registration & reassign symbols
+        printf("[SERVER] Registering new scanner: %s\n", client_id);
+        add_scanner(client_id, c);
     }
 
     // Handle scanner alerts
@@ -172,6 +217,7 @@ static void handle_ws_message(struct mg_connection *c, struct mg_ws_message *wm)
 
     json_object_put(root);
 }
+
 
 /* ------------------------- Event Handling -------------------------------- */
 static void event_handler(struct mg_connection *c, int ev, void *ev_data) {
