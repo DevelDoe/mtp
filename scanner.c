@@ -31,7 +31,7 @@ void log_message(const char* message) {
 
 /* ----------------------------- Helper Macros ------------------------------ */
 #define LOG(fmt, ...) printf("[%s] " fmt, __func__, ##__VA_ARGS__)
-#define LOG_DEBUG(fmt, ...) \
+#define DEBUG_PRINT(fmt, ...) \
     if (DEBUG_MODE) LOG(fmt, ##__VA_ARGS__)
 
 /* ----------------------------- Data Structures ---------------------------- */
@@ -617,7 +617,7 @@ int main() {
         // Main event loop for libwebsockets
         while (!shutdown_flag && !restart_flag) {
             lws_service(state.context, 50);
-            LOG_DEBUG("Running WebSocket event loop\n");
+            DEBUG_PRINT("Running WebSocket event loop\n");
         }
 
         // Signal threads to shutdown and wait for them
