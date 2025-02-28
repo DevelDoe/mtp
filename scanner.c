@@ -187,6 +187,7 @@ static int handle_local_server_connection(ScannerState *state) {
     state->wsi_local = lws_client_connect_via_info(&ccinfo);
     if (!state->wsi_local) {
         LOG("Failed to connect to local server\n");
+        state->wsi_local = NULL;  // Explicitly reset on failure
         return -1;
     }
 
@@ -466,65 +467,75 @@ static int finnhub_callback(struct lws *wsi, enum lws_callback_reasons reason, v
 // Trade processing thread: reads trades from the trade queue and checks for alerts.
 void* trade_processing_thread(void *lpParam) {
     ScannerState *state = (ScannerState *)lpParam;
+
     while (!state->shutdown_flag) {
-        TradeMsg trade;
+        TradeMsg trade_batch[10];  // Process trades in batches
+        int batch_size = 0;
+
+        // Acquire lock and dequeue trades in a batch
         pthread_mutex_lock(&state->trade_queue.mutex);
-        while (trade_queue_empty(&state->trade_queue) && !state->shutdown_flag) {
-            pthread_cond_wait(&state->trade_queue.cond, &state->trade_queue.mutex);
+        while (!trade_queue_empty(&state->trade_queue) && batch_size < 10) {
+            queue_pop_trade(&state->trade_queue, &trade_batch[batch_size]);
+            batch_size++;
         }
-        if (state->shutdown_flag) {
-            pthread_mutex_unlock(&state->trade_queue.mutex);
-            break;
-        }
-        queue_pop_trade(&state->trade_queue, &trade);
         pthread_mutex_unlock(&state->trade_queue.mutex);
 
-        // Find the symbol index (protect access to symbols)
-        int idx = -1;
-        pthread_mutex_lock(&state->symbols_mutex);
-        for (int i = 0; i < state->num_symbols; i++) {
-            if (strcmp(state->symbols[i], trade.symbol) == 0) {
-                idx = i;
-                break;
+        // Process each trade in the batch
+        for (int t = 0; t < batch_size; t++) {
+            TradeMsg *trade = &trade_batch[t];
+            int idx = -1;
+
+            // Find symbol index (using single mutex lock)
+            pthread_mutex_lock(&state->symbols_mutex);
+            for (int i = 0; i < state->num_symbols; i++) {
+                if (strcmp(state->symbols[i], trade->symbol) == 0) {
+                    idx = i;
+                    break;
+                }
             }
-        }
-        pthread_mutex_unlock(&state->symbols_mutex);
+            if (idx < 0) {
+                pthread_mutex_unlock(&state->symbols_mutex);
+                continue;  // Symbol not found, skip
+            }
 
-        if (idx < 0) continue;  // symbol not found
+            // Read and update last checked price in local cache
+            double old_price = state->last_checked_price[idx];
+            unsigned long last_alert_time = state->last_alert_time[idx];
+            unsigned long current_time = get_current_time_ms();
+            double new_price = trade->price;
 
-        // Protect access to last_checked_price and last_alert_time
-        pthread_mutex_lock(&state->symbols_mutex);
-        double old_price = state->last_checked_price[idx];
-        if (old_price <= 0 || isnan(old_price) || isinf(old_price)) {
-            state->last_checked_price[idx] = trade.price;
+            if (old_price <= 0 || isnan(old_price) || isinf(old_price)) {
+                state->last_checked_price[idx] = new_price;
+                pthread_mutex_unlock(&state->symbols_mutex);
+                continue;
+            }
+
+            // Calculate price change percentage
+            double change = ((new_price - old_price) / old_price) * 100.0;
+
+            // Check if alert conditions are met (price movement + debounce time)
+            if (fabs(change) >= PRICE_MOVEMENT && (current_time - last_alert_time >= DEBOUNCE_TIME)) {
+                AlertMsg alert = {idx, change, new_price, trade->volume};
+
+                // Push alert into queue (single mutex lock)
+                pthread_mutex_lock(&state->alert_queue.mutex);
+                queue_push_alert(&state->alert_queue, &alert);
+                pthread_cond_signal(&state->alert_queue.cond);
+                pthread_mutex_unlock(&state->alert_queue.mutex);
+
+                // Update last alert time
+                state->last_alert_time[idx] = current_time;
+            }
+
+            // Update last checked price
+            state->last_checked_price[idx] = new_price;
             pthread_mutex_unlock(&state->symbols_mutex);
-            continue;
         }
-
-        // Get precise current time in milliseconds
-        unsigned long current_time = get_current_time_ms();
-
-        double change = ((trade.price - old_price) / old_price) * 100.0;
-
-        if (fabs(change) >= PRICE_MOVEMENT && (current_time - state->last_alert_time[idx] >= DEBOUNCE_TIME)) {
-            AlertMsg alert;
-            alert.symbol_index = idx;
-            alert.change = change;  // Pass the signed change
-            alert.price = trade.price;
-            alert.volume = trade.volume;
-            pthread_mutex_lock(&state->alert_queue.mutex);
-            queue_push_alert(&state->alert_queue, &alert);
-            pthread_cond_signal(&state->alert_queue.cond);
-            pthread_mutex_unlock(&state->alert_queue.mutex);
-            state->last_alert_time[idx] = current_time;
-        }
-
-        // Update last checked price
-        state->last_checked_price[idx] = trade.price;
-        pthread_mutex_unlock(&state->symbols_mutex);
     }
-    return 0;
+    return NULL;
 }
+
+
 // Alert sending thread: reads alerts from the alert queue and sends them.
 void* alert_sending_thread(void *lpParam) {
     ScannerState *state = (ScannerState *)lpParam;
