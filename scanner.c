@@ -90,6 +90,8 @@ typedef struct {
 
     // Global shutdown flag
     volatile int shutdown_flag;
+
+    char scanner_id[64];  // Store scanner ID
 } ScannerState;
 
 // Session data for Finnhub connection
@@ -284,7 +286,7 @@ static int local_server_callback(struct lws *wsi, enum lws_callback_reasons reas
             state->wsi_local = wsi;
             {
                 char register_msg[128];
-                snprintf(register_msg, sizeof(register_msg), "{\"client_id\":\"scanner\"}");
+                snprintf(register_msg, sizeof(register_msg), "{\"client_id\":\"%s\"}", state->scanner_id);
                 unsigned char buf[LWS_PRE + 128];
                 unsigned char *p = &buf[LWS_PRE];
                 size_t msg_len = strlen(register_msg);
@@ -578,7 +580,7 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
-    const char *scanner_id = argv[1];  // Assign user-provided scanner ID
+    const char *scanner_id = argv[1];
 
     setup_signal_handlers();
 
@@ -586,7 +588,10 @@ int main(int argc, char *argv[]) {
         ScannerState state;
         initialize_state(&state);
 
-        // Define protocols for local server and Finnhub
+        // Store scanner_id in state
+        strncpy(state.scanner_id, scanner_id, sizeof(state.scanner_id) - 1);
+        state.scanner_id[sizeof(state.scanner_id) - 1] = '\0';
+
         struct lws_protocols protocols[] = {
             {"local-server", local_server_callback, 0, 0},
             {"finnhub", finnhub_callback, sizeof(FinnhubSession), 0},
@@ -610,7 +615,6 @@ int main(int argc, char *argv[]) {
         handle_local_server_connection(&state);
         handle_finnhub_connection(&state);
 
-        // Start the trade processing and alert sending threads
         pthread_t hTradeThread, hAlertThread;
         if (pthread_create(&hTradeThread, NULL, trade_processing_thread, &state) != 0) {
             LOG("Failed to create trade processing thread\n");
@@ -623,20 +627,17 @@ int main(int argc, char *argv[]) {
             return -1;
         }
 
-        // Main event loop for libwebsockets
         while (!shutdown_flag && !restart_flag) {
             lws_service(state.context, 50);
             DEBUG_PRINT("Running WebSocket event loop\n");
         }
 
-        // Signal threads to shutdown and wait for them
         state.shutdown_flag = 1;
         pthread_cond_broadcast(&state.trade_queue.cond);
         pthread_cond_broadcast(&state.alert_queue.cond);
         pthread_join(hTradeThread, NULL);
         pthread_join(hAlertThread, NULL);
 
-        // Cleanup and restart if needed
         lws_context_destroy(state.context);
         cleanup_state(&state);
 
