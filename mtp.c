@@ -6,8 +6,11 @@
 static const char *s_listen_url = "http://0.0.0.0:8000";
 #define MAX_SYMBOLS_PER_BATCH 50
 
-static char **stored_symbols = NULL;
+static const char **stored_symbols = NULL;
 static int stored_symbols_count = 0;
+
+/* ------------------------ Function Prototypes ---------------------------- */
+static void distribute_symbols_to_scanners();
 
 /* -------------------------- Client Management ---------------------------- */
 typedef struct ClientNode {
@@ -147,23 +150,22 @@ static void handle_scanner_update(struct mg_connection *c, struct mg_http_messag
     struct json_object *symbols_array = json_object_object_get(data_obj, "symbols");
     int num_symbols = json_object_array_length(symbols_array);
 
-    // --- Critical Fix 1: Proper symbol storage ---
     // Free existing symbols
     if (stored_symbols) {
-        for (int i = 0; i < stored_symbols_count; i++) free(stored_symbols[i]);
+        for (int i = 0; i < stored_symbols_count; i++) free((char *)stored_symbols[i]);
         free(stored_symbols);
     }
 
     // Copy new symbols with strdup()
-    stored_symbols = malloc(num_symbols * sizeof(char *));
+    stored_symbols = malloc(num_symbols * sizeof(const char *));
     for (int i = 0; i < num_symbols; i++) {
         struct json_object *item = json_object_array_get_idx(symbols_array, i);
         stored_symbols[i] = strdup(json_object_get_string(item));
     }
     stored_symbols_count = num_symbols;
 
-    // --- Critical Fix 2: Use stored symbols ---
-    distribute_symbols_to_scanners();  // Modified to use stored_symbols
+    // Distribute symbols to scanners
+    distribute_symbols_to_scanners();
 
     mg_http_reply(c, 200, NULL, "Symbols processed and forwarded to scanners");
     json_object_put(root);
