@@ -174,17 +174,10 @@ static void handle_scanner_update(struct mg_connection *c, struct mg_http_messag
         return;
     }
 
-    // Get all active scanner shards (ss1, ss2, ss3, ...)
-    ClientNode *scanners[10];  // Assume max 10 scanners
-    int scanner_count = 0;
+    // 🔹 Always check if `ss1` is connected first
+    struct mg_connection *scanner = find_client("ss1");
 
-    for (ClientNode *curr = client_map; curr; curr = curr->next) {
-        if (curr->is_scanner) {
-            scanners[scanner_count++] = curr;
-        }
-    }
-
-    if (scanner_count == 0) {
+    if (!scanner) {
         printf("[SERVER] No active scanners available\n");
         mg_http_reply(c, 503, "Content-Type: application/json\r\n",
                      "{\"error\": \"No active scanner shards available\"}");
@@ -192,38 +185,44 @@ static void handle_scanner_update(struct mg_connection *c, struct mg_http_messag
         return;
     }
 
-    printf("[SERVER] Distributing %d symbols among %d scanners\n", num_symbols, scanner_count);
+    printf("[SERVER] Distributing %d symbols among scanners\n", num_symbols);
 
     int assigned = 0;
-    int scanner_index = 0;
+    int scanner_index = 1;  // Start at `ss1`
 
-    while (assigned < num_symbols && scanner_index < scanner_count) {
+    while (assigned < num_symbols) {
         struct json_object *batch = json_object_new_array();
-        ClientNode *target_scanner = scanners[scanner_index];
 
         for (int j = 0; j < 50 && assigned < num_symbols; j++, assigned++) {
             struct json_object *symbol = json_object_array_get_idx(symbols_array, assigned);
             json_object_array_add(batch, json_object_get(symbol));
         }
 
+        // 🔹 Assign batch to scanner
+        char scanner_id[8];
+        snprintf(scanner_id, sizeof(scanner_id), "ss%d", scanner_index);
+        struct mg_connection *target_scanner = find_client(scanner_id);
+
+        if (!target_scanner) {
+            printf("[SERVER] Scanner %s not found, stopping distribution.\n", scanner_id);
+            json_object_put(batch);
+            break;
+        }
+
         const char *batch_data = json_object_to_json_string(batch);
         printf("[SERVER] Assigning %d symbols to %s: %s\n",
-               json_object_array_length(batch), target_scanner->client_id, batch_data);
+               json_object_array_length(batch), scanner_id, batch_data);
 
-        mg_ws_send(target_scanner->conn, batch_data, strlen(batch_data), WEBSOCKET_OP_TEXT);
+        mg_ws_send(target_scanner, batch_data, strlen(batch_data), WEBSOCKET_OP_TEXT);
         json_object_put(batch);
 
         scanner_index++;  // Move to the next scanner
     }
 
-    // If there are remaining symbols after all scanners are full, discard them
-    if (assigned < num_symbols) {
-        printf("[SERVER] Ignoring %d symbols since all scanners are full.\n", num_symbols - assigned);
-    }
-
     mg_http_reply(c, 200, NULL, "Symbols distributed.");
     json_object_put(root);
 }
+
 
 
 /* ---------------------- WebSocket Handlers ------------------------------- */
