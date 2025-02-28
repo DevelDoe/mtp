@@ -394,6 +394,8 @@ static int finnhub_callback(struct lws *wsi, enum lws_callback_reasons reason, v
                 LOG("Total symbols subscribed: %d\n", state->num_symbols);
             }
 
+            DEBUG_PRINT("Subscribed to: %s\n", subscribe_msg);
+
             session->sub_index++;
             if (session->sub_index < state->num_symbols) lws_callback_on_writable(wsi);
         }
