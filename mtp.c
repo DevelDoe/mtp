@@ -129,7 +129,14 @@ static void handle_root(struct mg_connection *c) {
 
 static void handle_ws_upgrade(struct mg_connection *c, struct mg_http_message *hm) {
     printf("[SERVER] Upgrading connection to WebSocket\n");
-    mg_ws_upgrade(c, hm, NULL);
+
+    // Validate WebSocket handshake
+    if (mg_http_match_uri(hm, "/ws")) {
+        mg_ws_upgrade(c, hm, NULL);
+    } else {
+        printf("[SERVER] Invalid WebSocket upgrade request\n");
+        mg_http_reply(c, 400, NULL, "Invalid WebSocket upgrade request");
+    }
 }
 
 static void handle_scanner_update(struct mg_connection *c, struct mg_http_message *hm) {
@@ -246,7 +253,11 @@ static void event_handler(struct mg_connection *c, int ev, void *ev_data) {
 
         case MG_EV_WS_MSG: {
             struct mg_ws_message *wm = (struct mg_ws_message *) ev_data;
-            handle_ws_message(c, wm);
+            if (wm->flags & WEBSOCKET_OP_TEXT) {
+                handle_ws_message(c, wm);
+            } else {
+                printf("[SERVER] Received non-text WebSocket frame (opcode: %d)\n", wm->flags & 0x0F);
+            }
             break;
         }
 
