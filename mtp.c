@@ -12,6 +12,11 @@ static const char *s_listen_url = "http://0.0.0.0:8000";
 static const char **all_symbols = NULL;
 static int total_symbols = 0;
 
+/* ---------------------- Function Declarations ---------------------- */
+static void distribute_symbols_to_scanners();  // Prevent implicit declaration warning
+static struct mg_connection *find_client(const char *client_id);  // Declare find_client
+
+
 /* -------------------------- Scanner Management --------------------------- */
 typedef struct ScannerNode {
     char client_id[32];
