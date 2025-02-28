@@ -16,9 +16,6 @@ static struct mg_connection *find_client(const char *client_id);  // Declare fin
 static const char **all_symbols = NULL;
 static int total_symbols = 0;
 
-
-
-
 /* -------------------------- Scanner Management --------------------------- */
 typedef struct ScannerNode {
     char client_id[32];
@@ -101,6 +98,18 @@ static void remove_client(struct mg_connection *conn) {
         curr = &(*curr)->next;
     }
 }
+
+static struct mg_connection *find_client(const char *client_id) {
+    ClientNode *curr = client_map;
+    while (curr) {
+        if (strcmp(curr->client_id, client_id) == 0) {
+            return curr->conn;  // Return connection if found
+        }
+        curr = curr->next;
+    }
+    return NULL;  // Client not found
+}
+
 
 /* ---------------------- WebSocket Symbol Distribution -------------------- */
 static void send_symbols_to_scanner(struct mg_connection *scanner, const char **symbols, int num_symbols) {
