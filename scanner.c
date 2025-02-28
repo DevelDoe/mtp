@@ -187,7 +187,6 @@ static int handle_local_server_connection(ScannerState *state) {
     state->wsi_local = lws_client_connect_via_info(&ccinfo);
     if (!state->wsi_local) {
         LOG("Failed to connect to local server\n");
-        state->wsi_local = NULL;  // Explicitly reset on failure
         return -1;
     }
 
@@ -526,7 +525,6 @@ void* trade_processing_thread(void *lpParam) {
     }
     return 0;
 }
-
 // Alert sending thread: reads alerts from the alert queue and sends them.
 void* alert_sending_thread(void *lpParam) {
     ScannerState *state = (ScannerState *)lpParam;
