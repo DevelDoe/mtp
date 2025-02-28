@@ -6,22 +6,27 @@
 static const char *s_listen_url = "http://0.0.0.0:8000";
 #define MAX_SYMBOLS_PER_BATCH 50
 
+static char **stored_symbols = NULL;
+static int stored_symbols_count = 0;
+
 /* -------------------------- Client Management ---------------------------- */
 typedef struct ClientNode {
     char client_id[32];
     struct mg_connection *conn;
+    bool is_scanner;  // Track if this client is a scanner
     struct ClientNode *next;
 } ClientNode;
 
 static ClientNode *client_map = NULL;
 
-static void add_client(const char *client_id, struct mg_connection *conn) {
+static void add_client(const char *client_id, struct mg_connection *conn, bool is_scanner) {
     ClientNode *node = malloc(sizeof(ClientNode));
     snprintf(node->client_id, sizeof(node->client_id), "%s", client_id);
     node->conn = conn;
+    node->is_scanner = is_scanner;  // Set the scanner flag
     node->next = client_map;
     client_map = node;
-    printf("[SERVER] Registered client: %s\n", client_id);
+    printf("[SERVER] Registered client: %s (scanner: %d)\n", client_id, is_scanner);
 }
 
 static void remove_client(struct mg_connection *conn) {
@@ -30,8 +35,11 @@ static void remove_client(struct mg_connection *conn) {
         if ((*curr)->conn == conn) {
             ClientNode *tmp = *curr;
             *curr = (*curr)->next;
+            printf("[SERVER] Removed client: %s (scanner: %d)\n", tmp->client_id, tmp->is_scanner);
             free(tmp);
-            printf("[SERVER] Removed client\n");
+
+            // Redistribute symbols if a scanner was removed
+            distribute_symbols_to_scanners();
             return;
         }
         curr = &(*curr)->next;
@@ -65,36 +73,49 @@ static void send_symbols_to_scanner(struct mg_connection *scanner, const char **
 static void broadcast_alert(const char *alert_data) {
     printf("[SERVER] Broadcasting alert to all clients: %s\n", alert_data);
     for (ClientNode *curr = client_map; curr; curr = curr->next) {
-        // Broadcast alert to all clients except for the scanner
-        if (strcmp(curr->client_id, "scanner") != 0) {
+        // Broadcast alert to all clients except scanners
+        if (!curr->is_scanner) {
             printf("[SERVER] Sending alert to client: %s\n", curr->client_id);
             mg_ws_send(curr->conn, alert_data, strlen(alert_data), WEBSOCKET_OP_TEXT);
         }
     }
 }
 
-static void distribute_symbols_to_scanners(const char **symbols, int total_symbols) {
-    int batch_count = (total_symbols + MAX_SYMBOLS_PER_BATCH - 1) / MAX_SYMBOLS_PER_BATCH;  // Calculate number of batches
-    int i = 0;
+static void distribute_symbols_to_scanners() {
+    if (!stored_symbols || stored_symbols_count == 0) return;
+
+    int total = stored_symbols_count;
+    int num_scanners = 0;
+
+    // Count active scanners
+    for (ClientNode *c = client_map; c; c = c->next) {
+        if (c->is_scanner) num_scanners++;
+    }
+
+    if (num_scanners == 0) {
+        printf("[SERVER] No scanners connected. Symbols not distributed.\n");
+        return;
+    }
+
+    int max_symbols = num_scanners * MAX_SYMBOLS_PER_BATCH;
+    int to_send = (total < max_symbols) ? total : max_symbols;
+
+    int sent = 0;
     ClientNode *curr = client_map;
+    while (sent < to_send && curr) {
+        if (!curr->is_scanner) {
+            curr = curr->next;
+            continue;
+        }
 
-    while (curr && i < batch_count) {
-        // Calculate the current batch size
-        const char **batch = &symbols[i * MAX_SYMBOLS_PER_BATCH];
-        int batch_size = (total_symbols - i * MAX_SYMBOLS_PER_BATCH < MAX_SYMBOLS_PER_BATCH) ? (total_symbols - i * MAX_SYMBOLS_PER_BATCH) : MAX_SYMBOLS_PER_BATCH;
-
-        // Send this batch of symbols to the current scanner
-        send_symbols_to_scanner(curr->conn, batch, batch_size);
-
-        // Move to the next scanner
+        int batch_size = (to_send - sent > MAX_SYMBOLS_PER_BATCH)
+                         ? MAX_SYMBOLS_PER_BATCH : (to_send - sent);
+        send_symbols_to_scanner(curr->conn, &stored_symbols[sent], batch_size);
+        sent += batch_size;
         curr = curr->next;
-        i++;
     }
 
-    // If there are more batches than scanners, discard the rest
-    if (i < batch_count) {
-        printf("[SERVER] Not enough scanners for the remaining symbols\n");
-    }
+    printf("[SERVER] Distributed %d symbols to %d scanners\n", sent, num_scanners);
 }
 
 /* ------------------------- HTTP Handlers ---------------------------------- */
@@ -118,26 +139,31 @@ static void handle_scanner_update(struct mg_connection *c, struct mg_http_messag
                !json_object_object_get_ex(root, "data", &data_obj)) {
         printf("[SERVER] Invalid symbol update request format\n");
         mg_http_reply(c, 400, "Content-Type: application/json\r\n", "{\"error\": \"Invalid request format\"}");
-        json_object_put(root);
+        if (root) json_object_put(root);
         return;
     }
 
     const char *client_id = json_object_get_string(client_id_obj);
-    const char *data = json_object_to_json_string(data_obj);
-
-    printf("[SERVER] Received symbols from client %s: %s\n", client_id, data);
-
-    // Convert symbols into a list of strings (you may use your own format)
     struct json_object *symbols_array = json_object_object_get(data_obj, "symbols");
     int num_symbols = json_object_array_length(symbols_array);
-    const char *symbols[num_symbols];
 
-    for (int i = 0; i < num_symbols; i++) {
-        symbols[i] = json_object_get_string(json_object_array_get_idx(symbols_array, i));
+    // --- Critical Fix 1: Proper symbol storage ---
+    // Free existing symbols
+    if (stored_symbols) {
+        for (int i = 0; i < stored_symbols_count; i++) free(stored_symbols[i]);
+        free(stored_symbols);
     }
 
-    // Distribute symbols to scanners
-    distribute_symbols_to_scanners(symbols, num_symbols);
+    // Copy new symbols with strdup()
+    stored_symbols = malloc(num_symbols * sizeof(char *));
+    for (int i = 0; i < num_symbols; i++) {
+        struct json_object *item = json_object_array_get_idx(symbols_array, i);
+        stored_symbols[i] = strdup(json_object_get_string(item));
+    }
+    stored_symbols_count = num_symbols;
+
+    // --- Critical Fix 2: Use stored symbols ---
+    distribute_symbols_to_scanners();  // Modified to use stored_symbols
 
     mg_http_reply(c, 200, NULL, "Symbols processed and forwarded to scanners");
     json_object_put(root);
@@ -148,26 +174,37 @@ static void handle_ws_message(struct mg_connection *c, struct mg_ws_message *wm)
     printf("[SERVER] Received WebSocket message: %.*s\n", (int)wm->data.len, wm->data.ptr);
 
     struct json_object *root = json_tokener_parse(wm->data.ptr);
-    struct json_object *client_id_obj, *data_obj;
-
-    if (!root || !json_object_object_get_ex(root, "client_id", &client_id_obj)) {
+    if (!root) {
         printf("[SERVER] Invalid WebSocket message format\n");
+        return;
+    }
+
+    struct json_object *client_id_obj;
+    if (!json_object_object_get_ex(root, "client_id", &client_id_obj)) {
+        printf("[SERVER] Missing client_id in WebSocket message\n");
+        json_object_put(root);
         return;
     }
 
     const char *client_id = json_object_get_string(client_id_obj);
 
-    // Register new clients (except scanner which connects via HTTP first)
+    // Determine if client is a scanner (e.g., client_id starts with "ss")
+    bool is_scanner = (strncmp(client_id, "ss", 2) == 0);
+
+    // Register new client if not already registered
     if (!find_client(client_id)) {
-        printf("[SERVER] Registering new client: %s\n", client_id);
-        add_client(client_id, c);
+        printf("[SERVER] Registering new client: %s (scanner: %d)\n", client_id, is_scanner);
+        add_client(client_id, c, is_scanner);
     }
 
     // Handle scanner alerts
-    if (strcmp(client_id, "scanner") == 0 && json_object_object_get_ex(root, "data", &data_obj)) {
-        const char *alert = json_object_to_json_string(data_obj);
-        printf("[SERVER] Received alert from scanner: %s\n", alert);
-        broadcast_alert(alert);  // Broadcast the alert to all clients
+    if (is_scanner) {
+        struct json_object *data_obj;
+        if (json_object_object_get_ex(root, "data", &data_obj)) {
+            const char *alert = json_object_to_json_string(data_obj);
+            printf("[SERVER] Received alert from scanner: %s\n", alert);
+            broadcast_alert(alert);  // Broadcast the alert to all clients
+        }
     }
 
     json_object_put(root);
