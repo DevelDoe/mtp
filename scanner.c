@@ -233,10 +233,10 @@ static void send_alert(ScannerState *state, int symbol_idx, double change, doubl
 
     char payload[256];
     snprintf(payload, sizeof(payload),
-             "{\"client_id\":\"scanner\",\"data\":{"
+             "{\"client_id\":\"%s\",\"data\":{"
              "\"symbol\":\"%s\",\"direction\":\"%s\","
              "\"change_percent\":%.2f,\"price\":%.2f,\"volume\":%d}}",
-             state->symbols[symbol_idx], direction, fabs(change), price, volume);
+             state->scanner_id, state->symbols[symbol_idx], direction, fabs(change), price, volume);
 
     unsigned char buf[LWS_PRE + 256];
     unsigned char *p = &buf[LWS_PRE];
