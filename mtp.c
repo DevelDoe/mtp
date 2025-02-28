@@ -8,13 +8,15 @@
 static const char *s_listen_url = "http://0.0.0.0:8000";
 #define MAX_SYMBOLS_PER_BATCH 50
 
+/* ---------------------- Function Declarations ---------------------- */
+static void distribute_symbols_to_scanners();  // Prevent implicit declaration warning
+static struct mg_connection *find_client(const char *client_id);  // Declare find_client
+
 /* --------------------- Global Variables for Symbols ---------------------- */
 static const char **all_symbols = NULL;
 static int total_symbols = 0;
 
-/* ---------------------- Function Declarations ---------------------- */
-static void distribute_symbols_to_scanners();  // Prevent implicit declaration warning
-static struct mg_connection *find_client(const char *client_id);  // Declare find_client
+
 
 
 /* -------------------------- Scanner Management --------------------------- */
