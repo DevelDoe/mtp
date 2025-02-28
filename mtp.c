@@ -40,20 +40,15 @@ static void add_client(const char *client_id, struct mg_connection *conn) {
     printf("[SERVER] Registered client: %s (Scanner: %d)\n", client_id, node->is_scanner);
 }
 
-static ClientNode *find_least_used_scanner() {
-    ClientNode *selected = NULL;
-    int min_load = 50; // Maximum load per scanner
-
-    for (ClientNode *curr = client_map; curr; curr = curr->next) {
-        if (curr->is_scanner) {
-            int load = json_object_array_length(curr->conn); // Symbols assigned
-            if (load < min_load) {
-                min_load = load;
-                selected = curr;
-            }
+static ClientNode *find_client(const char *client_id) {
+    ClientNode *curr = client_map;
+    while (curr) {
+        if (strcmp(curr->client_id, client_id) == 0) {
+            return curr;
         }
+        curr = curr->next;
     }
-    return selected;
+    return NULL;
 }
 
 static void remove_client(struct mg_connection *conn) {
@@ -65,8 +60,7 @@ static void remove_client(struct mg_connection *conn) {
 
             if (tmp->conn) {
                 mg_ws_send(tmp->conn, "{\"error\":\"Client disconnected\"}", 30, WEBSOCKET_OP_TEXT);
-                mg_ws_close(tmp->conn);
-                mg_mgr_remove_conn(tmp->conn);
+                mg_http_disconnect(tmp->conn);  // Corrected function
                 tmp->conn = NULL;
             }
 
@@ -78,17 +72,6 @@ static void remove_client(struct mg_connection *conn) {
     }
 }
 
-static struct mg_connection *find_scanner(const char *scanner_id) {
-    ClientNode *curr = client_map;
-    while (curr) {
-        if (strncmp(curr->client_id, scanner_id, strlen(scanner_id)) == 0) {
-            return curr->conn;
-        }
-        curr = curr->next;
-    }
-    return NULL;
-}
-
 static void remove_inactive_scanners() {
     time_t now = time(NULL);
     ClientNode **curr = &client_map;
@@ -97,24 +80,36 @@ static void remove_inactive_scanners() {
         if ((*curr)->is_scanner && (now - (*curr)->last_seen > SCANNER_TIMEOUT)) {
             printf("[SERVER] Removing inactive scanner: %s\n", (*curr)->client_id);
 
-            // Double-check before removal (ensure it's still inactive)
-            if (find_client((*curr)->client_id)) {
-                ClientNode *tmp = *curr;
-                *curr = (*curr)->next;
+            ClientNode *tmp = *curr;
+            *curr = (*curr)->next;
 
-                if (tmp->conn) {
-                    mg_ws_send(tmp->conn, "{\"error\":\"Scanner timeout\"}", 27, WEBSOCKET_OP_TEXT);
-                    mg_ws_close(tmp->conn);
-                    mg_mgr_remove_conn(tmp->conn);
-                    tmp->conn = NULL;
-                }
-
-                free(tmp);
+            if (tmp->conn) {
+                mg_ws_send(tmp->conn, "{\"error\":\"Scanner timeout\"}", 27, WEBSOCKET_OP_TEXT);
+                mg_http_disconnect(tmp->conn);  // Corrected function
+                tmp->conn = NULL;
             }
+
+            free(tmp);
         } else {
             curr = &(*curr)->next;
         }
     }
+}
+
+static ClientNode *find_least_used_scanner() {
+    ClientNode *selected = NULL;
+    int min_load = 50;  // Placeholder value for scanner capacity
+
+    for (ClientNode *curr = client_map; curr; curr = curr->next) {
+        if (curr->is_scanner) {
+            int load = 0;  // You need a way to track scanner load
+            if (load < min_load) {
+                min_load = load;
+                selected = curr;
+            }
+        }
+    }
+    return selected;
 }
 
 
@@ -175,7 +170,9 @@ static void handle_scanner_update(struct mg_connection *c, struct mg_http_messag
     }
 
     // 🔹 Always check if `ss1` is connected first
-    struct mg_connection *scanner = find_client("ss1");
+    ClientNode *scanner_node = find_client("ss1");
+    struct mg_connection *scanner = scanner_node ? scanner_node->conn : NULL;
+
 
     if (!scanner) {
         printf("[SERVER] No active scanners available\n");
