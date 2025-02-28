@@ -61,7 +61,7 @@ static void remove_client(struct mg_connection *conn) {
 
             if (tmp->conn) {
                 mg_ws_send(tmp->conn, "{\"error\":\"Client disconnected\"}", 30, WEBSOCKET_OP_TEXT);
-                mg_mgr_remove_conn(tmp->conn);  // ✅ Corrected function
+                mg_mgr_free(tmp->conn->mgr);
                 tmp->conn = NULL;
             }
 
@@ -87,7 +87,7 @@ static void remove_inactive_scanners() {
 
             if (tmp->conn) {
                 mg_ws_send(tmp->conn, "{\"error\":\"Scanner timeout\"}", 27, WEBSOCKET_OP_TEXT);
-                mg_mgr_remove_conn(tmp->conn);  // ✅ Corrected function
+                mg_mgr_free(tmp->conn->mgr);
                 tmp->conn = NULL;
             }
 
