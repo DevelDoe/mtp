@@ -296,56 +296,60 @@ static int local_server_callback(struct lws *wsi, enum lws_callback_reasons reas
             }
             break;
 
-        case LWS_CALLBACK_CLIENT_RECEIVE: {
-            // Expecting a JSON with a "symbols" array
-            struct json_object *msg = json_tokener_parse((char *)in);
-            struct json_object *symbols_array;
-            if (json_object_object_get_ex(msg, "symbols", &symbols_array)) {
-                pthread_mutex_lock(&state->symbols_mutex);
+            case LWS_CALLBACK_CLIENT_RECEIVE: {
+        // Expecting a JSON with a "symbols" array
+        struct json_object *msg = json_tokener_parse((char *)in);
+        struct json_object *symbols_array;
+        if (json_object_object_get_ex(msg, "symbols", &symbols_array)) {
+            pthread_mutex_lock(&state->symbols_mutex);
 
-                // Unsubscribe from old symbols
-                if (state->wsi_finnhub) {
-                    for (int i = 0; i < state->num_symbols; i++) {
-                        char unsubscribe_msg[128];
-                        snprintf(unsubscribe_msg, sizeof(unsubscribe_msg), "{\"type\":\"unsubscribe\",\"symbol\":\"%s\"}", state->symbols[i]);
-                        unsigned char buf[LWS_PRE + 128];
-                        unsigned char *p = &buf[LWS_PRE];
-                        size_t msg_len = strlen(unsubscribe_msg);
-                        memcpy(p, unsubscribe_msg, msg_len);
-                        lws_write(state->wsi_finnhub, p, msg_len, LWS_WRITE_TEXT);
-                        LOG("Unsubscribed from: %s\n", unsubscribe_msg);
-                    }
-                }
-
-                // Free old symbols
+            // Unsubscribe from old symbols
+            if (state->wsi_finnhub) {
                 for (int i = 0; i < state->num_symbols; i++) {
-                    free(state->symbols[i]);
-                    state->symbols[i] = NULL;
+                    char unsubscribe_msg[128];
+                    snprintf(unsubscribe_msg, sizeof(unsubscribe_msg), "{\"type\":\"unsubscribe\",\"symbol\":\"%s\"}", state->symbols[i]);
+                    unsigned char buf[LWS_PRE + 128];
+                    unsigned char *p = &buf[LWS_PRE];
+                    size_t msg_len = strlen(unsubscribe_msg);
+                    memcpy(p, unsubscribe_msg, msg_len);
+                    lws_write(state->wsi_finnhub, p, msg_len, LWS_WRITE_TEXT);
                 }
-
-                // Update symbols list
-                state->num_symbols = json_object_array_length(symbols_array);
-                if (state->num_symbols > MAX_SYMBOLS) state->num_symbols = MAX_SYMBOLS;
-                for (int i = 0; i < state->num_symbols; i++) {
-                    const char *sym = json_object_get_string(json_object_array_get_idx(symbols_array, i));
-                    state->symbols[i] = strdup(sym);
-                    // Initialize price tracking values
-                    state->last_checked_price[i] = 0.0;
-                    state->last_alert_time[i] = 0;
-                }
-
-                pthread_mutex_unlock(&state->symbols_mutex);
-
-                // Trigger re-subscription on Finnhub
-                if (state->wsi_finnhub) {
-                    FinnhubSession *session = (FinnhubSession *)lws_wsi_user(state->wsi_finnhub);
-                    session->sub_index = 0;  // Reset subscription index
-                    lws_callback_on_writable(state->wsi_finnhub);
-                }
+                LOG("Unsubscribed from %d symbols\n", state->num_symbols);
             }
-            json_object_put(msg);
-            break;
+
+            // Free old symbols
+            for (int i = 0; i < state->num_symbols; i++) {
+                free(state->symbols[i]);
+                state->symbols[i] = NULL;
+            }
+
+            // Update symbols list
+            state->num_symbols = json_object_array_length(symbols_array);
+            if (state->num_symbols > MAX_SYMBOLS) state->num_symbols = MAX_SYMBOLS;
+            for (int i = 0; i < state->num_symbols; i++) {
+                const char *sym = json_object_get_string(json_object_array_get_idx(symbols_array, i));
+                state->symbols[i] = strdup(sym);
+                // Initialize price tracking values
+                state->last_checked_price[i] = 0.0;
+                state->last_alert_time[i] = 0;
+            }
+
+            pthread_mutex_unlock(&state->symbols_mutex);
+
+            // Log the new total number of symbols
+            LOG("Now subscribing to %d symbols\n", state->num_symbols);
+
+            // Trigger re-subscription on Finnhub
+            if (state->wsi_finnhub) {
+                FinnhubSession *session = (FinnhubSession *)lws_wsi_user(state->wsi_finnhub);
+                session->sub_index = 0;  // Reset subscription index
+                lws_callback_on_writable(state->wsi_finnhub);
+            }
         }
+        json_object_put(msg);
+        break;
+    }
+
 
         case LWS_CALLBACK_CLIENT_CLOSED:
             LOG("Local server connection closed\n");
@@ -369,24 +373,30 @@ static int finnhub_callback(struct lws *wsi, enum lws_callback_reasons reason, v
             lws_callback_on_writable(wsi);
             break;
 
-        case LWS_CALLBACK_CLIENT_WRITEABLE:
+            case LWS_CALLBACK_CLIENT_WRITEABLE:
+        if (session->sub_index < state->num_symbols) {
+            char subscribe_msg[128];
+            pthread_mutex_lock(&state->symbols_mutex);
             if (session->sub_index < state->num_symbols) {
-                char subscribe_msg[128];
-                pthread_mutex_lock(&state->symbols_mutex);
-                if (session->sub_index < state->num_symbols) {
-                    snprintf(subscribe_msg, sizeof(subscribe_msg), "{\"type\":\"subscribe\",\"symbol\":\"%s\"}", state->symbols[session->sub_index]);
-                }
-                pthread_mutex_unlock(&state->symbols_mutex);
-                unsigned char buf[LWS_PRE + 128];
-                unsigned char *p = &buf[LWS_PRE];
-                size_t msg_len = strlen(subscribe_msg);
-                memcpy(p, subscribe_msg, msg_len);
-                lws_write(wsi, p, msg_len, LWS_WRITE_TEXT);
-                LOG("Subscribed to: %s\n", subscribe_msg);
-                session->sub_index++;
-                if (session->sub_index < state->num_symbols) lws_callback_on_writable(wsi);
+                snprintf(subscribe_msg, sizeof(subscribe_msg), "{\"type\":\"subscribe\",\"symbol\":\"%s\"}", state->symbols[session->sub_index]);
             }
-            break;
+            pthread_mutex_unlock(&state->symbols_mutex);
+            unsigned char buf[LWS_PRE + 128];
+            unsigned char *p = &buf[LWS_PRE];
+            size_t msg_len = strlen(subscribe_msg);
+            memcpy(p, subscribe_msg, msg_len);
+            lws_write(wsi, p, msg_len, LWS_WRITE_TEXT);
+
+            // Print the total number of symbols once instead of each symbol
+            if (session->sub_index == 0) {
+                LOG("Total symbols subscribed: %d\n", state->num_symbols);
+            }
+
+            session->sub_index++;
+            if (session->sub_index < state->num_symbols) lws_callback_on_writable(wsi);
+        }
+        break;
+
 
         case LWS_CALLBACK_CLIENT_RECEIVE: {
             LOG("Finnhub received data: %.*s\n", (int)len, (char *)in);
