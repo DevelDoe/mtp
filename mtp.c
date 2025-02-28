@@ -150,6 +150,14 @@ static void handle_scanner_update(struct mg_connection *c, struct mg_http_messag
     struct json_object *symbols_array = json_object_object_get(data_obj, "symbols");
     int num_symbols = json_object_array_length(symbols_array);
 
+    // Log the symbols being processed
+    printf("[SERVER] Processing %d symbols:\n", num_symbols);
+    for (int i = 0; i < num_symbols; i++) {
+        struct json_object *item = json_object_array_get_idx(symbols_array, i);
+        const char *symbol = json_object_get_string(item);
+        printf("  - %s\n", symbol);
+    }
+
     // Free existing symbols
     if (stored_symbols) {
         for (int i = 0; i < stored_symbols_count; i++) free((char *)stored_symbols[i]);
@@ -197,6 +205,11 @@ static void handle_ws_message(struct mg_connection *c, struct mg_ws_message *wm)
     if (!find_client(client_id)) {
         printf("[SERVER] Registering new client: %s (scanner: %d)\n", client_id, is_scanner);
         add_client(client_id, c, is_scanner);
+
+        // Redistribute symbols if this is a new scanner
+        if (is_scanner) {
+            distribute_symbols_to_scanners();
+        }
     }
 
     // Handle scanner alerts
