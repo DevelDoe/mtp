@@ -1,18 +1,15 @@
 #include "mongoose.h"
 #include <stdio.h>
 #include <json-c/json.h>
-#include <time.h>  // Include for time functions
 
 /* ---------------------------- Configuration ------------------------------ */
-static const char *s_listen_url = "http://0.0.0.0:8000";  // HTTP endpoint for symbol updates
-#define SCANNER_TIMEOUT 60  // 60 seconds before removing inactive scanners
+static const char *s_listen_url = "http://0.0.0.0:8000";
+#define MAX_SYMBOLS_PER_BATCH 50
 
 /* -------------------------- Client Management ---------------------------- */
 typedef struct ClientNode {
     char client_id[32];
     struct mg_connection *conn;
-    int is_scanner;  // 1 if the client is a scanner, 0 otherwise
-    time_t last_seen;  // New field for heartbeat tracking
     struct ClientNode *next;
 } ClientNode;
 
@@ -22,11 +19,9 @@ static void add_client(const char *client_id, struct mg_connection *conn) {
     ClientNode *node = malloc(sizeof(ClientNode));
     snprintf(node->client_id, sizeof(node->client_id), "%s", client_id);
     node->conn = conn;
-    node->is_scanner = (strncmp(client_id, "ss", 2) == 0);  // Identify if scanner based on client_id
-    node->last_seen = time(NULL);
     node->next = client_map;
     client_map = node;
-    printf("[SERVER] Registered client: %s (Scanner: %d)\n", client_id, node->is_scanner);
+    printf("[SERVER] Registered client: %s\n", client_id);
 }
 
 static void remove_client(struct mg_connection *conn) {
@@ -43,50 +38,73 @@ static void remove_client(struct mg_connection *conn) {
     }
 }
 
-static ClientNode *find_client(const char *client_id) {
+static struct mg_connection *find_client(const char *client_id) {
     ClientNode *curr = client_map;
-    while (curr) {
-        if (strcmp(curr->client_id, client_id) == 0) {
-            return curr;
-        }
-        curr = curr->next;
-    }
-    return NULL;
+    while (curr && strcmp(curr->client_id, client_id) != 0) curr = curr->next;
+    return curr ? curr->conn : NULL;
 }
 
 /* ------------------------ WebSocket Utilities ---------------------------- */
-static void broadcast_alert(const char *alert_data) {
-    printf("[SERVER] Broadcasting alert to all clients: %s\n", alert_data);
-    for (ClientNode *curr = client_map; curr; curr = curr->next) {
-        if (strcmp(curr->client_id, "scanner") != 0) {
-            printf("[SERVER] Sending alert to client: %s\n", curr->client_id);
-            mg_ws_send(curr->conn, alert_data, strlen(alert_data), WEBSOCKET_OP_TEXT);
-        }
+static void send_symbols_to_scanner(struct mg_connection *scanner, const char **symbols, int num_symbols) {
+    // Create a JSON object containing the symbols
+    struct json_object *root = json_object_new_object();
+    struct json_object *symbols_array = json_object_new_array();
+
+    for (int i = 0; i < num_symbols; i++) {
+        json_object_array_add(symbols_array, json_object_new_string(symbols[i]));
+    }
+
+    json_object_object_add(root, "symbols", symbols_array);
+    const char *data = json_object_to_json_string(root);
+
+    // Send the symbols to the scanner
+    mg_ws_send(scanner, data, strlen(data), WEBSOCKET_OP_TEXT);
+    json_object_put(root);
+}
+
+static void distribute_symbols_to_scanners(const char **symbols, int total_symbols) {
+    int batch_count = (total_symbols + MAX_SYMBOLS_PER_BATCH - 1) / MAX_SYMBOLS_PER_BATCH;  // Calculate number of batches
+    int i = 0;
+    ClientNode *curr = client_map;
+
+    while (curr && i < batch_count) {
+        // Calculate the current batch size
+        const char **batch = &symbols[i * MAX_SYMBOLS_PER_BATCH];
+        int batch_size = (total_symbols - i * MAX_SYMBOLS_PER_BATCH < MAX_SYMBOLS_PER_BATCH) ? (total_symbols - i * MAX_SYMBOLS_PER_BATCH) : MAX_SYMBOLS_PER_BATCH;
+
+        // Send this batch of symbols to the current scanner
+        send_symbols_to_scanner(curr->conn, batch, batch_size);
+
+        // Move to the next scanner
+        curr = curr->next;
+        i++;
+    }
+
+    // If there are more batches than scanners, discard the rest
+    if (i < batch_count) {
+        printf("[SERVER] Not enough scanners for the remaining symbols\n");
     }
 }
 
 /* ------------------------- HTTP Handlers ---------------------------------- */
-
-// Root endpoint handler to test server status
 static void handle_root(struct mg_connection *c) {
     printf("[SERVER] Received request for root endpoint\n");
     mg_http_reply(c, 200, "Content-Type: application/json\r\n", "{\"status\": \"Server is running\"}");
 }
 
-// WebSocket upgrade handler
 static void handle_ws_upgrade(struct mg_connection *c, struct mg_http_message *hm) {
     printf("[SERVER] Upgrading connection to WebSocket\n");
     mg_ws_upgrade(c, hm, NULL);
 }
 
-// Handler for symbol update requests from HTTP clients
 static void handle_scanner_update(struct mg_connection *c, struct mg_http_message *hm) {
     printf("[SERVER] Received symbol update request\n");
 
     struct json_object *root = json_tokener_parse(hm->body.ptr);
     struct json_object *client_id_obj, *data_obj;
 
-    if (!root || !json_object_object_get_ex(root, "client_id", &client_id_obj) || !json_object_object_get_ex(root, "data", &data_obj)) {
+    if (!root || !json_object_object_get_ex(root, "client_id", &client_id_obj) ||
+               !json_object_object_get_ex(root, "data", &data_obj)) {
         printf("[SERVER] Invalid symbol update request format\n");
         mg_http_reply(c, 400, "Content-Type: application/json\r\n", "{\"error\": \"Invalid request format\"}");
         json_object_put(root);
@@ -98,17 +116,19 @@ static void handle_scanner_update(struct mg_connection *c, struct mg_http_messag
 
     printf("[SERVER] Received symbols from client %s: %s\n", client_id, data);
 
-    // Find a scanner client and forward the symbol data
-    ClientNode *scanner = find_client("ss1");  // Default to a scanner named "ss1"
-    if (scanner) {
-        printf("[SERVER] Forwarding symbols to scanner\n");
-        mg_ws_send(scanner->conn, data, strlen(data), WEBSOCKET_OP_TEXT);
-        mg_http_reply(c, 200, NULL, "Symbols forwarded to scanner");
-    } else {
-        printf("[SERVER] No active scanner available\n");
-        mg_http_reply(c, 503, "Content-Type: application/json\r\n", "{\"error\": \"Scanner offline\"}");
+    // Convert symbols into a list of strings (you may use your own format)
+    struct json_object *symbols_array = json_object_object_get(data_obj, "symbols");
+    int num_symbols = json_object_array_length(symbols_array);
+    const char *symbols[num_symbols];
+
+    for (int i = 0; i < num_symbols; i++) {
+        symbols[i] = json_object_get_string(json_object_array_get_idx(symbols_array, i));
     }
 
+    // Distribute symbols to scanners
+    distribute_symbols_to_scanners(symbols, num_symbols);
+
+    mg_http_reply(c, 200, NULL, "Symbols processed and forwarded to scanners");
     json_object_put(root);
 }
 
@@ -187,9 +207,7 @@ int main(void) {
     mg_http_listen(&mgr, s_listen_url, event_handler, NULL);
     printf("[SERVER] Server started on %s\n", s_listen_url);
 
-    while (true) {
-        mg_mgr_poll(&mgr, 1000);
-    }
+    while (true) mg_mgr_poll(&mgr, 1000);
 
     mg_mgr_free(&mgr);
     return 0;
