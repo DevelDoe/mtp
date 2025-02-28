@@ -572,21 +572,15 @@ void setup_signal_handlers() {
 }
 
 /* ----------------------------- Main Function ----------------------------- */
-/* ----------------------------- Main Function ----------------------------- */
 int main(int argc, char *argv[]) {
     if (argc < 2) {
-        fprintf(stderr, "Usage: %s <scanner_id>\n", argv[0]);
-        return EXIT_FAILURE;
+        fprintf(stderr, "Usage: %s {scanner_id}\n", argv[0]);
+        return 1;
     }
 
-    // Set scanner ID from command-line argument
-    set_scanner_id(argv[1]);
+    const char *scanner_id = argv[1];  // Assign user-provided scanner ID
 
-    // Setup signal handlers
-    signal(SIGINT, handle_signal);
-    signal(SIGTERM, handle_signal);
-    signal(SIGSEGV, handle_signal);
-    signal(SIGABRT, handle_signal);
+    setup_signal_handlers();
 
     while (!shutdown_flag) {
         ScannerState state;
@@ -611,25 +605,36 @@ int main(int argc, char *argv[]) {
             return -1;
         }
 
+        LOG("Scanner ID: %s\n", scanner_id);
+
         handle_local_server_connection(&state);
         handle_finnhub_connection(&state);
 
         // Start the trade processing and alert sending threads
-        HANDLE hTradeThread = CreateThread(NULL, 0, trade_processing_thread, &state, 0, NULL);
-        HANDLE hAlertThread = CreateThread(NULL, 0, alert_sending_thread, &state, 0, NULL);
+        pthread_t hTradeThread, hAlertThread;
+        if (pthread_create(&hTradeThread, NULL, trade_processing_thread, &state) != 0) {
+            LOG("Failed to create trade processing thread\n");
+            cleanup_state(&state);
+            return -1;
+        }
+        if (pthread_create(&hAlertThread, NULL, alert_sending_thread, &state) != 0) {
+            LOG("Failed to create alert sending thread\n");
+            cleanup_state(&state);
+            return -1;
+        }
 
         // Main event loop for libwebsockets
         while (!shutdown_flag && !restart_flag) {
             lws_service(state.context, 50);
-            LOG_DEBUG("Running WebSocket event loop\n");
+            DEBUG_PRINT("Running WebSocket event loop\n");
         }
 
         // Signal threads to shutdown and wait for them
         state.shutdown_flag = 1;
         pthread_cond_broadcast(&state.trade_queue.cond);
         pthread_cond_broadcast(&state.alert_queue.cond);
-        WaitForSingleObject(hTradeThread, INFINITE);
-        WaitForSingleObject(hAlertThread, INFINITE);
+        pthread_join(hTradeThread, NULL);
+        pthread_join(hAlertThread, NULL);
 
         // Cleanup and restart if needed
         lws_context_destroy(state.context);
