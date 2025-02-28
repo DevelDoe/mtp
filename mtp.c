@@ -224,7 +224,6 @@ static void handle_scanner_update(struct mg_connection *c, struct mg_http_messag
 }
 
 
-
 /* ---------------------- WebSocket Handlers ------------------------------- */
 static void handle_ws_message(struct mg_connection *c, struct mg_ws_message *wm) {
     printf("[SERVER] Received WebSocket message: %.*s\n", (int)wm->data.len, wm->data.ptr);
