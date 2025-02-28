@@ -6,7 +6,7 @@
 /* ---------------------------- Configuration ------------------------------ */
 
 static const char *s_listen_url = "http://0.0.0.0:8000";
-#define SCANNER_TIMEOUT 60  // 10 seconds before removing inactive scanners
+#define SCANNER_TIMEOUT 60  // 60 seconds before removing inactive scanners
 
 /* -------------------------- Client Management ---------------------------- */
 
@@ -61,7 +61,7 @@ static void remove_client(struct mg_connection *conn) {
 
             if (tmp->conn) {
                 mg_ws_send(tmp->conn, "{\"error\":\"Client disconnected\"}", 30, WEBSOCKET_OP_TEXT);
-                mg_mgr_free(tmp->conn->mgr);
+                mg_close_conn(tmp->conn);  // Proper way to close a connection
                 tmp->conn = NULL;
             }
 
@@ -72,7 +72,6 @@ static void remove_client(struct mg_connection *conn) {
         curr = &(*curr)->next;
     }
 }
-
 
 static void remove_inactive_scanners() {
     time_t now = time(NULL);
@@ -87,7 +86,7 @@ static void remove_inactive_scanners() {
 
             if (tmp->conn) {
                 mg_ws_send(tmp->conn, "{\"error\":\"Scanner timeout\"}", 27, WEBSOCKET_OP_TEXT);
-                mg_mgr_free(tmp->conn->mgr);
+                mg_close_conn(tmp->conn);
                 tmp->conn = NULL;
             }
 
@@ -97,8 +96,6 @@ static void remove_inactive_scanners() {
         }
     }
 }
-
-
 
 /* ------------------------- HTTP Handlers ---------------------------------- */
 
@@ -140,11 +137,46 @@ static void handle_scanner_update(struct mg_connection *c, struct mg_http_messag
         return;
     }
 
-    printf("[SERVER] Distributing %d symbols among scanners\n", num_symbols);
+    printf("[SERVER] Sending symbols to scanner\n");
     mg_ws_send(scanner, json_object_to_json_string(symbols_array),
                strlen(json_object_to_json_string(symbols_array)), WEBSOCKET_OP_TEXT);
 
     mg_http_reply(c, 200, NULL, "Symbols distributed.");
+    json_object_put(root);
+}
+
+/* ------------------------- WebSocket Handlers ---------------------------- */
+
+static void handle_ws_message(struct mg_connection *c, struct mg_ws_message *wm) {
+    printf("[SERVER] Received WebSocket message: %.*s\n", (int)wm->data.len, wm->data.ptr);
+
+    struct json_object *root = json_tokener_parse(wm->data.ptr);
+    struct json_object *client_id_obj, *type_obj;
+
+    if (!root || !json_object_object_get_ex(root, "client_id", &client_id_obj)) {
+        printf("[SERVER] Invalid WebSocket message format\n");
+        json_object_put(root);
+        return;
+    }
+
+    const char *client_id = json_object_get_string(client_id_obj);
+    ClientNode *client = find_client(client_id);
+
+    if (!client) {
+        printf("[SERVER] Registering new WebSocket client: %s\n", client_id);
+        add_client(client_id, c);
+        client = find_client(client_id);
+    }
+
+    // Handle heartbeat messages
+    if (json_object_object_get_ex(root, "type", &type_obj)) {
+        const char *type = json_object_get_string(type_obj);
+        if (strcmp(type, "heartbeat") == 0) {
+            client->last_seen = time(NULL);
+            printf("[SERVER] Heartbeat received from %s\n", client_id);
+        }
+    }
+
     json_object_put(root);
 }
 
@@ -163,6 +195,9 @@ static void event_handler(struct mg_connection *c, int ev, void *ev_data) {
         }
         case MG_EV_WS_OPEN:
             printf("[SERVER] WebSocket connection opened\n");
+            break;
+        case MG_EV_WS_MSG:
+            handle_ws_message(c, (struct mg_ws_message *) ev_data);
             break;
         case MG_EV_CLOSE:
             if (c->is_websocket) {
