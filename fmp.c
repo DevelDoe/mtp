@@ -109,8 +109,8 @@ int main() {
     const char *api_key = "RFWWfFzwRZJrDNSxzF4M64RKcuXq3T0O";
     const char *market_cap_upper = "25000000";
     const char *price_lower = "1";
-    const char *price_upper = "4";
-    const char *min_volume = "100000";
+    const char *price_upper = "6";
+    const char *min_volume = "10000";
     const char *exchange = "NASDAQ";
     const char *trading = "true";
     const char *etf = "false";
