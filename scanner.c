@@ -204,7 +204,7 @@ static int handle_finnhub_connection(ScannerState *state) {
     ccinfo.context = state->context;
     ccinfo.address = "ws.finnhub.io";
     ccinfo.port = 443;
-    ccinfo.path = "/?token=crhlrm9r01qjv9rl4bhgcrhlrm9r01qjv9rl4bi0";  // Replace with your token
+    ccinfo.path = "/?token=cv0q3q1r01qo8ssi98cgcv0q3q1r01qo8ssi98d0";  // Replace with your token
     ccinfo.host = ccinfo.address;
     ccinfo.origin = ccinfo.address;
     ccinfo.protocol = "finnhub";

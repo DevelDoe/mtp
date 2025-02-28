@@ -9,8 +9,10 @@ static const char *s_listen_url = "http://0.0.0.0:8000";
 typedef struct ClientNode {
     char client_id[32];
     struct mg_connection *conn;
+    int is_scanner;  // 1 = scanner shard, 0 = regular client
     struct ClientNode *next;
 } ClientNode;
+
 
 static ClientNode *client_map = NULL;
 
