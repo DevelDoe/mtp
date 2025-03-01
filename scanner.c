@@ -1,4 +1,31 @@
-#include "scanner.h"
+#include "mtp.h"
+/* ---------------------- Function Declarations ---------------------- */
+
+// Queue functions
+static int trade_queue_empty(TradeQueue *q);
+static int trade_queue_full(TradeQueue *q);
+static void queue_push_trade(TradeQueue *q, TradeMsg *trade);
+static void queue_pop_trade(TradeQueue *q, TradeMsg *trade);
+static int alert_queue_empty(AlertQueue *q);
+static int alert_queue_full(AlertQueue *q);
+static void queue_push_alert(AlertQueue *q, AlertMsg *alert);
+static void queue_pop_alert(AlertQueue *q, AlertMsg *alert);
+
+// WebSocket Handlers
+static int handle_local_server_connection(ScannerState *state);
+static int handle_finnhub_connection(ScannerState *state);
+
+// Trade & Alert processing
+static void send_alert(ScannerState *state, int symbol_idx, double change, double price, int volume);
+static void enqueue_trade(ScannerState *state, const char *symbol, double price, int volume);
+
+// WebSocket callbacks
+static int local_server_callback(struct lws *wsi, enum lws_callback_reasons reason, void *user, void *in, size_t len);
+int finnhub_callback(struct lws *wsi, enum lws_callback_reasons reason, void *user, void *in, size_t len);
+
+// Worker threads
+static void* trade_processing_thread(void *lpParam);
+static void* alert_sending_thread(void *lpParam);
 
 /* ----------------------------- Utility functions ------------------------------ */
 unsigned long get_current_time_ms() {
@@ -7,14 +34,17 @@ unsigned long get_current_time_ms() {
     clock_gettime(CLOCK_REALTIME, &ts);
     return ts.tv_sec * 1000UL + ts.tv_nsec / 1000000UL;
 }
-void log_message(const char* message) {
-    syslog(LOG_INFO, "%s", message);
+void log_message(int level, const char* fmt, ...) {
+    va_list args;
+    va_start(args, fmt);
+    vsyslog(level, fmt, args);
+    va_end(args);
 }
 /* ----------------------------- Queue Functions ---------------------------- */
 // TradeQueue functions
-int trade_queue_empty(TradeQueue *q) { return q->head == q->tail; }
-int trade_queue_full(TradeQueue *q) { return ((q->tail + 1) % MAX_QUEUE_SIZE) == q->head; }
-void queue_push_trade(TradeQueue *q, TradeMsg *trade) {
+static int trade_queue_empty(TradeQueue *q) { return q->head == q->tail; }
+static int trade_queue_full(TradeQueue *q) { return ((q->tail + 1) % MAX_QUEUE_SIZE) == q->head; }
+static void queue_push_trade(TradeQueue *q, TradeMsg *trade) {
     if (trade_queue_full(q)) {
       LOG(LOG_WARNING, "Trade queue full, dropping trade for %s at %.2f\n",
           trade->symbol, trade->price);
@@ -23,15 +53,15 @@ void queue_push_trade(TradeQueue *q, TradeMsg *trade) {
     q->trades[q->tail] = *trade;
     q->tail = (q->tail + 1) % MAX_QUEUE_SIZE;
 }
-void queue_pop_trade(TradeQueue *q, TradeMsg *trade) {
+static void queue_pop_trade(TradeQueue *q, TradeMsg *trade) {
     if (trade_queue_empty(q)) return;
     *trade = q->trades[q->head];
     q->head = (q->head + 1) % MAX_QUEUE_SIZE;
 }
 // AlertQueue functions
-int alert_queue_empty(AlertQueue *q) { return q->head == q->tail; }
-int alert_queue_full(AlertQueue *q) { return ((q->tail + 1) % MAX_QUEUE_SIZE) == q->head; }
-void queue_push_alert(AlertQueue *q, AlertMsg *alert) {
+static int alert_queue_empty(AlertQueue *q) { return q->head == q->tail; }
+static int alert_queue_full(AlertQueue *q) { return ((q->tail + 1) % MAX_QUEUE_SIZE) == q->head; }
+static void queue_push_alert(AlertQueue *q, AlertMsg *alert) {
     if (alert_queue_full(q)) {
       LOG(LOG_WARNING, "Alert queue full, dropping alert for symbol index %d\n", alert->symbol_index);
         return;
@@ -39,13 +69,13 @@ void queue_push_alert(AlertQueue *q, AlertMsg *alert) {
     q->alerts[q->tail] = *alert;
     q->tail = (q->tail + 1) % MAX_QUEUE_SIZE;
 }
-void queue_pop_alert(AlertQueue *q, AlertMsg *alert) {
+static void queue_pop_alert(AlertQueue *q, AlertMsg *alert) {
     if (alert_queue_empty(q)) return;
     *alert = q->alerts[q->head];
     q->head = (q->head + 1) % MAX_QUEUE_SIZE;
 }
 /* ----------------------------- Initialization ----------------------------- */
-void initialize_state(ScannerState *state) {
+static void initialize_state(ScannerState *state) {
     memset(state, 0, sizeof(*state));
     pthread_mutex_init(&state->symbols_mutex, NULL);
 
@@ -57,7 +87,7 @@ void initialize_state(ScannerState *state) {
     pthread_mutex_init(&state->alert_queue.mutex, NULL);
     pthread_cond_init(&state->alert_queue.cond, NULL);
 }
-void cleanup_state(ScannerState *state) {
+static void cleanup_state(ScannerState *state) {
     // Free symbols
     pthread_mutex_lock(&state->symbols_mutex);
     for (int i = 0; i < state->num_symbols; i++) {
@@ -73,7 +103,7 @@ void cleanup_state(ScannerState *state) {
 }
 /* ----------------------------- WebSocket Handlers ----------------------------- */
 /* ----------------------------- WebSocket Handlers ----------------------------- */
-int handle_local_server_connection(ScannerState *state) {
+static int handle_local_server_connection(ScannerState *state) {
     if (!state || !state->context) {
         LOG(LOG_ERR, "Invalid state or context when connecting to local server\n");
         return -1;
@@ -97,7 +127,7 @@ int handle_local_server_connection(ScannerState *state) {
 
     return 0;
 }
-int handle_finnhub_connection(ScannerState *state) {
+static int handle_finnhub_connection(ScannerState *state) {
     if (!state || !state->context) {
         LOG(LOG_ERR, "Invalid state or context when connecting to Finnhub\n");
         return -1;
@@ -105,7 +135,7 @@ int handle_finnhub_connection(ScannerState *state) {
 
     struct lws_client_connect_info ccinfo = {0};
     ccinfo.context = state->context;
-    ccinfo.address = FINNHUB_HOST;  
+    ccinfo.address = FINNHUB_HOST;
     ccinfo.port = 443;
     ccinfo.path = FINNHUB_PATH;
     ccinfo.host = FINNHUB_HOST;
@@ -115,8 +145,8 @@ int handle_finnhub_connection(ScannerState *state) {
 
     state->wsi_finnhub = lws_client_connect_via_info(&ccinfo);
     if (!state->wsi_finnhub) {
-        LOG(LOG_ERR, "Failed to initiate Finnhub connection: host=%s, path=%s, port=%d\n",
-            FINNHUB_HOST, FINNHUB_PATH, ccinfo.port);
+      LOG(LOG_ERR, "Failed to initiate Finnhub connection: host=%s, path=%s, port=%d, errno=%d (%s)\n",
+      FINNHUB_HOST, FINNHUB_PATH, ccinfo.port, errno, strerror(errno));
         return -1;
     }
 
@@ -125,7 +155,7 @@ int handle_finnhub_connection(ScannerState *state) {
 }
 
 /* ----------------------------- Alert Sending ----------------------------- */
-void send_alert(ScannerState *state, int symbol_idx, double change, double price, int volume) {
+static void send_alert(ScannerState *state, int symbol_idx, double change, double price, int volume) {
     if (symbol_idx < 0 || symbol_idx >= state->num_symbols || !state->symbols[symbol_idx]) {
         LOG(LOG_ERR, "Invalid symbol index (%d) or null symbol in send_alert\n", symbol_idx);
         return;
@@ -154,7 +184,7 @@ void send_alert(ScannerState *state, int symbol_idx, double change, double price
     }
 }
 /* ----------------------------- Enqueue Trade ----------------------------- */
-void enqueue_trade(ScannerState *state, const char *symbol, double price, int volume) {
+static void enqueue_trade(ScannerState *state, const char *symbol, double price, int volume) {
     if (!state || !symbol) {
         LOG(LOG_ERR, "Invalid arguments in enqueue_trade (symbol: %s)\n", symbol ? symbol : "NULL");
         return;
@@ -180,7 +210,7 @@ void enqueue_trade(ScannerState *state, const char *symbol, double price, int vo
     pthread_mutex_unlock(&state->trade_queue.mutex);
 }
 /* ----------------------------- WebSocket Callbacks ----------------------------- */
-int local_server_callback(struct lws *wsi, enum lws_callback_reasons reason, void *user, void *in, size_t len) {
+static int local_server_callback(struct lws *wsi, enum lws_callback_reasons reason, void *user, void *in, size_t len) {
     ScannerState *state = (ScannerState *)lws_context_user(lws_get_context(wsi));
 
     switch (reason) {
@@ -262,7 +292,7 @@ int local_server_callback(struct lws *wsi, enum lws_callback_reasons reason, voi
     }
     return 0;
 }
-int finnhub_callback(struct lws *wsi, enum lws_callback_reasons reason, void *user, void *in, size_t len) {
+static int finnhub_callback(struct lws *wsi, enum lws_callback_reasons reason, void *user, void *in, size_t len) {
     FinnhubSession *session = (FinnhubSession *)user;
     ScannerState *state = (ScannerState *)lws_context_user(lws_get_context(wsi));
 
@@ -338,7 +368,7 @@ int finnhub_callback(struct lws *wsi, enum lws_callback_reasons reason, void *us
     return 0;
 }
 /* ----------------------------- Worker Threads ----------------------------- */
-void* trade_processing_thread(void *lpParam) {
+static void* trade_processing_thread(void *lpParam) {
     ScannerState *state = (ScannerState *)lpParam;
     while (!state->shutdown_flag) {
         TradeMsg trade;
@@ -408,7 +438,7 @@ void* trade_processing_thread(void *lpParam) {
     }
     return 0;
 }
-void* alert_sending_thread(void *lpParam) {
+static void* alert_sending_thread(void *lpParam) {
     ScannerState *state = (ScannerState *)lpParam;
     while (!state->shutdown_flag) {
         AlertMsg alert;

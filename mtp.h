@@ -1,6 +1,7 @@
-#ifndef SCANNER_H
-#define SCANNER_H
+#ifndef MTP_H
+#define MTP_H
 
+// scnner
 #include <json-c/json.h>
 #include <libwebsockets.h>
 #include <math.h>
@@ -11,6 +12,11 @@
 #include <string.h>
 #include <time.h>
 #include <syslog.h>
+
+// mtp
+#include "mongoose.h"
+#include <stdio.h>
+#include <json-c/json.h>
 
 /* ---------------------- Configuration Macros ---------------------- */
 
@@ -98,32 +104,6 @@ typedef struct {
 unsigned long get_current_time_ms();
 void log_message(const char* message);
 
-// Queue functions
-int trade_queue_empty(TradeQueue *q);
-int trade_queue_full(TradeQueue *q);
-void queue_push_trade(TradeQueue *q, TradeMsg *trade);
-void queue_pop_trade(TradeQueue *q, TradeMsg *trade);
-int alert_queue_empty(AlertQueue *q);
-int alert_queue_full(AlertQueue *q);
-void queue_push_alert(AlertQueue *q, AlertMsg *alert);
-void queue_pop_alert(AlertQueue *q, AlertMsg *alert);
-
-// WebSocket Handlers
-int handle_local_server_connection(ScannerState *state);
-int handle_finnhub_connection(ScannerState *state);
-
-// Trade & Alert processing
-void send_alert(ScannerState *state, int symbol_idx, double change, double price, int volume);
-void enqueue_trade(ScannerState *state, const char *symbol, double price, int volume);
-
-// WebSocket callbacks
-int local_server_callback(struct lws *wsi, enum lws_callback_reasons reason, void *user, void *in, size_t len);
-int finnhub_callback(struct lws *wsi, enum lws_callback_reasons reason, void *user, void *in, size_t len);
-
-// Worker threads
-void* trade_processing_thread(void *lpParam);
-void* alert_sending_thread(void *lpParam);
-
 // Signal Handling
 void handle_signal(int sig);
 void setup_signal_handlers();
@@ -132,4 +112,4 @@ void setup_signal_handlers();
 void initialize_state(ScannerState *state);
 void cleanup_state(ScannerState *state);
 
-#endif // SCANNER_H
+#endif // MTP_H

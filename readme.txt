@@ -30,6 +30,15 @@ tail -f /var/log/scanner.log
 journalctl -u scanner --priority=3 //  only error logs
 
 
+// Verify Incoming Data
+journalctl -fu scanner | grep "Finnhub received data"
+// Look for alerts being pushed:
+journalctl -fu scanner | grep "Alert sent"
+// Restart scanner manually and confirm that Finnhub reconnects properly:
+systemctl restart scanner
+journalctl -fu scanner
+
+
 // To run them immediately
 
 Start MTP WebSocket Server

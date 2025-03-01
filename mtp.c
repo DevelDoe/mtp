@@ -1,10 +1,7 @@
-#include "mongoose.h"
-#include <stdio.h>
-#include <json-c/json.h>
+#inclue <mtp.h?
 
 /* ---------------------------- Configuration ------------------------------ */
 static const char *s_listen_url = "http://0.0.0.0:8000";
-#define MAX_SYMBOLS_PER_BATCH 50
 
 static const char **stored_symbols = NULL;
 static int stored_symbols_count = 0;
@@ -100,7 +97,7 @@ static void distribute_symbols_to_scanners() {
         return;
     }
 
-    int max_symbols = num_scanners * MAX_SYMBOLS_PER_BATCH;
+    int max_symbols = num_scanners * MAX_SYMBOLS;
     int to_send = (total < max_symbols) ? total : max_symbols;
 
     int sent = 0;
@@ -111,8 +108,8 @@ static void distribute_symbols_to_scanners() {
             continue;
         }
 
-        int batch_size = (to_send - sent > MAX_SYMBOLS_PER_BATCH)
-                         ? MAX_SYMBOLS_PER_BATCH : (to_send - sent);
+        int batch_size = (to_send - sent > MAX_SYMBOLS)
+                         ? MAX_SYMBOLS : (to_send - sent);
         send_symbols_to_scanner(curr->conn, &stored_symbols[sent], batch_size);
         sent += batch_size;
         curr = curr->next;
