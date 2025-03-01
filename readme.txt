@@ -15,28 +15,29 @@ chmod -x {file}
 
 
 //Create a Systemd Service
-sudo nano /etc/systemd/system/mtp.service
+ nano /etc/systemd/system/mtp.service
 
 
 // Enable and Start the Service systemctl
-sudo systemctl daemon-reload
-sudo systemctl enable mtp
-sudo systemctl start mtp
-sudo systemctl status mtp
+systemctl daemon-reload
+systemctl enable mtp
+systemctl start fmp
+systemctl stop mtp
+systemctl restart mtp
+systemctl status fmp
+journalctl -fu fmp
+tail -f /var/log/scanner.log
+journalctl -u scanner --priority=3 //  only error logs
 
-sudo systemctl restart mtp
-sudo systemctl stop mtp
-sudo systemctl start fmp
-sudo systemctl status fmp
 
 // To run them immediately
 
 Start MTP WebSocket Server
-sudo systemctl start mtp.service
-sudo systemctl start fmp.service
+ systemctl start mtp.service
+ systemctl start fmp.service
 
 // Check Logs
-sudo journalctl -u mtp -f
+ journalctl -u mtp -f
 
 // Or view specific log files:
 cat /var/log/mtp.log
@@ -44,7 +45,7 @@ cat /var/log/mtp_error.log
 
 
 // 1 Create the fmp Systemd Service
-sudo nano /etc/systemd/system/fmp.service
+ nano /etc/systemd/system/fmp.service
 ```
 [Unit]
 Description=FMP Program (Runs at 3:50 AM - 5:00 PM)
@@ -60,7 +61,7 @@ StandardError=append:/var/log/fmp_error.log
 ```
 
 //  2 Create a Timer to Start fmp at 3:50 AM
-sudo nano /etc/systemd/system/fmp.timer
+ nano /etc/systemd/system/fmp.timer
 ```
 [Unit]
 Description=Timer to start and stop FMP program
@@ -75,7 +76,7 @@ WantedBy=timers.target
 ```
 
 // 3 Create a Service to Stop
-sudo nano /etc/systemd/system/fmp-stop.service
+ nano /etc/systemd/system/fmp-stop.service
 ```
 [Unit]
 Description=Stop FMP program
@@ -86,7 +87,7 @@ User=root
 ```
 
 // Create a Timer to Stop
-sudo nano /etc/systemd/system/fmp-stop.timer
+ nano /etc/systemd/system/fmp-stop.timer
 ```
 [Unit]
 Description=Timer to stop FMP program
@@ -101,10 +102,10 @@ WantedBy=timers.target
 ```
 
 // 5 Enable and Start the Timers
-sudo systemctl daemon-reload
-sudo systemctl enable fmp.timer fmp-stop.timer
-sudo systemctl start fmp.timer fmp-stop.timer
+ systemctl daemon-reload
+ systemctl enable fmp.timer fmp-stop.timer
+ systemctl start fmp.timer fmp-stop.timer
 
 // 6 Verify
 systemctl list-timers --all
-sudo systemctl status fmp
+ systemctl status fmp

@@ -30,7 +30,10 @@ void log_message(const char* message) {
 #define MAX_QUEUE_SIZE 1024  // For both trade and alert queues
 
 /* ----------------------------- Helper Macros ------------------------------ */
-#define LOG(fmt, ...) printf("[%s] " fmt, __func__, ##__VA_ARGS__)
+#define LOG(fmt, ...) do { \
+    syslog(LOG_INFO, "[%s] " fmt, __func__, ##__VA_ARGS__); \
+} while (0)
+
 #define DEBUG_PRINT(fmt, ...) \
     if (DEBUG_MODE) LOG(fmt, ##__VA_ARGS__)
 
@@ -577,6 +580,9 @@ void setup_signal_handlers() {
 
 /* ----------------------------- Main Function ----------------------------- */
 int main(int argc, char *argv[]) {
+    openlog("scanner", LOG_PID | LOG_CONS, LOG_USER);  // Open syslog
+    LOG("Scanner started\n");
+
     if (argc < 2) {
         fprintf(stderr, "Usage: %s {scanner_id}\n", argv[0]);
         return 1;
@@ -649,6 +655,8 @@ int main(int argc, char *argv[]) {
         }
     }
 
+
     LOG("Program shutdown gracefully.\n");
+    closelog();
     return 0;
 }
