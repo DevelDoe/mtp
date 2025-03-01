@@ -12,7 +12,6 @@
 #include <string.h>
 #include <time.h>
 #include <syslog.h>
-#include "mongoose.h"
 
 /* ---------------------- Configuration Macros ---------------------- */
 
