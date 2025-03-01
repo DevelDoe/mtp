@@ -82,9 +82,10 @@ static void cleanup_state(ScannerState *state) {
     pthread_cond_destroy(&state->alert_queue.cond);
 }
 /* ----------------------------- WebSocket Handlers ----------------------------- */
+/* ----------------------------- WebSocket Handlers ----------------------------- */
 static int handle_local_server_connection(ScannerState *state) {
     if (!state || !state->context) {
-        LOG(LOG_ERR, "Invalid state or context when connecting to local server\n");
+        LOG("Error: Invalid state or context when connecting to local server\n");
         return -1;
     }
 
@@ -93,23 +94,24 @@ static int handle_local_server_connection(ScannerState *state) {
     ccinfo.address = LOCAL_ADDRESS;
     ccinfo.port = LOCAL_PORT;
     ccinfo.path = "/ws";
-    ccinfo.host = ccinfo.address;
-    ccinfo.origin = ccinfo.address;
+    ccinfo.host = LOCAL_ADDRESS;
+    ccinfo.origin = LOCAL_ADDRESS;
     ccinfo.protocol = "local-server";
     ccinfo.ssl_connection = 0;
 
     state->wsi_local = lws_client_connect_via_info(&ccinfo);
     if (!state->wsi_local) {
-        LOG(LOG_ERR, "Failed to connect to local server\n");
+        LOG("Error: Failed to connect to local server\n");
         return -1;
     }
 
     DEBUG_PRINT("Local server connection established\n");
     return 0;
 }
+
 static int handle_finnhub_connection(ScannerState *state) {
     if (!state || !state->context) {
-        LOG(LOG_ERR, "Invalid state or context when connecting to Finnhub\n");
+        LOG("Error: Invalid state or context when connecting to Finnhub\n");
         return -1;
     }
 
@@ -117,15 +119,15 @@ static int handle_finnhub_connection(ScannerState *state) {
     ccinfo.context = state->context;
     ccinfo.address = FINNHUB_ADDRESS;
     ccinfo.port = 443;
-    ccinfo.path = FINNBUB_KEY;
-    ccinfo.host = ccinfo.address;
-    ccinfo.origin = ccinfo.address;
+    ccinfo.path = FINNHUB_KEY;
+    ccinfo.host = FINNHUB_ADDRESS;
+    ccinfo.origin = FINNHUB_ADDRESS;
     ccinfo.protocol = "finnhub";
     ccinfo.ssl_connection = LCCSCF_USE_SSL;
 
     state->wsi_finnhub = lws_client_connect_via_info(&ccinfo);
     if (!state->wsi_finnhub) {
-        LOG(LOG_ERR, "Failed to connect to Finnhub\n");
+        LOG("Error: Failed to connect to Finnhub\n");
         return -1;
     }
 
