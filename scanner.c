@@ -21,7 +21,7 @@ static void enqueue_trade(ScannerState *state, const char *symbol, double price,
 
 // WebSocket callbacks
 static int local_server_callback(struct lws *wsi, enum lws_callback_reasons reason, void *user, void *in, size_t len);
-int finnhub_callback(struct lws *wsi, enum lws_callback_reasons reason, void *user, void *in, size_t len);
+static int finnhub_callback(struct lws *wsi, enum lws_callback_reasons reason, void *user, void *in, size_t len);
 
 // Worker threads
 static void* trade_processing_thread(void *lpParam);
@@ -75,7 +75,7 @@ static void queue_pop_alert(AlertQueue *q, AlertMsg *alert) {
     q->head = (q->head + 1) % MAX_QUEUE_SIZE;
 }
 /* ----------------------------- Initialization ----------------------------- */
-static void initialize_state(ScannerState *state) {
+void initialize_state(ScannerState *state) {
     memset(state, 0, sizeof(*state));
     pthread_mutex_init(&state->symbols_mutex, NULL);
 
@@ -87,7 +87,7 @@ static void initialize_state(ScannerState *state) {
     pthread_mutex_init(&state->alert_queue.mutex, NULL);
     pthread_cond_init(&state->alert_queue.cond, NULL);
 }
-static void cleanup_state(ScannerState *state) {
+void cleanup_state(ScannerState *state) {
     // Free symbols
     pthread_mutex_lock(&state->symbols_mutex);
     for (int i = 0; i < state->num_symbols; i++) {
