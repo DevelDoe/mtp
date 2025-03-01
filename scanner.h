@@ -28,8 +28,8 @@
 // WebSocket Server URIs
 #define LOCAL_ADDRESS "127.0.0.1"
 #define LOCAL_PORT 8000
-#define FINNHUB_ADDRESS "ws://ws.finnhub.io"
-#define FINNHUB_KEY "/?token=cv0q3q1r01qo8ssi98cgcv0q3q1r01qo8ssi98d0"
+#define FINNHUB_HOST "ws.finnhub.io"
+#define FINNHUB_PATH "/?token=cv0q3q1r01qo8ssi98cgcv0q3q1r01qo8ssi98d0"
 
 /* ---------------------- Logging Macros ---------------------- */
 

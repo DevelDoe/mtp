@@ -105,22 +105,25 @@ int handle_finnhub_connection(ScannerState *state) {
 
     struct lws_client_connect_info ccinfo = {0};
     ccinfo.context = state->context;
-    ccinfo.address = FINNHUB_ADDRESS;
+    ccinfo.address = FINNHUB_HOST;  
     ccinfo.port = 443;
-    ccinfo.path = FINNHUB_KEY;
-    ccinfo.host = FINNHUB_ADDRESS;
-    ccinfo.origin = FINNHUB_ADDRESS;
+    ccinfo.path = FINNHUB_PATH;
+    ccinfo.host = FINNHUB_HOST;
+    ccinfo.origin = FINNHUB_HOST;
     ccinfo.protocol = "finnhub";
     ccinfo.ssl_connection = LCCSCF_USE_SSL;
 
     state->wsi_finnhub = lws_client_connect_via_info(&ccinfo);
     if (!state->wsi_finnhub) {
-        LOG(LOG_ERR, "Failed to initiate Finnhub connection\n");
+        LOG(LOG_ERR, "Failed to initiate Finnhub connection: host=%s, path=%s, port=%d\n",
+            FINNHUB_HOST, FINNHUB_PATH, ccinfo.port);
         return -1;
     }
 
+    LOG(LOG_NOTICE, "Finnhub connection initiated successfully\n");
     return 0;
 }
+
 /* ----------------------------- Alert Sending ----------------------------- */
 void send_alert(ScannerState *state, int symbol_idx, double change, double price, int volume) {
     if (symbol_idx < 0 || symbol_idx >= state->num_symbols || !state->symbols[symbol_idx]) {
