@@ -12,11 +12,7 @@
 #include <string.h>
 #include <time.h>
 #include <syslog.h>
-
-// mtp
 #include "mongoose.h"
-#include <stdio.h>
-#include <json-c/json.h>
 
 /* ---------------------- Configuration Macros ---------------------- */
 
