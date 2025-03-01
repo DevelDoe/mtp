@@ -7,16 +7,14 @@ unsigned long get_current_time_ms() {
     clock_gettime(CLOCK_REALTIME, &ts);
     return ts.tv_sec * 1000UL + ts.tv_nsec / 1000000UL;
 }
-
 void log_message(const char* message) {
     syslog(LOG_INFO, "%s", message);
 }
-
 /* ----------------------------- Queue Functions ---------------------------- */
 // TradeQueue functions
-static int trade_queue_empty(TradeQueue *q) { return q->head == q->tail; }
-static int trade_queue_full(TradeQueue *q) { return ((q->tail + 1) % MAX_QUEUE_SIZE) == q->head; }
-static void queue_push_trade(TradeQueue *q, TradeMsg *trade) {
+int trade_queue_empty(TradeQueue *q) { return q->head == q->tail; }
+int trade_queue_full(TradeQueue *q) { return ((q->tail + 1) % MAX_QUEUE_SIZE) == q->head; }
+void queue_push_trade(TradeQueue *q, TradeMsg *trade) {
     if (trade_queue_full(q)) {
       LOG(LOG_WARNING, "Trade queue full, dropping trade for %s at %.2f\n",
           trade->symbol, trade->price);
@@ -25,15 +23,15 @@ static void queue_push_trade(TradeQueue *q, TradeMsg *trade) {
     q->trades[q->tail] = *trade;
     q->tail = (q->tail + 1) % MAX_QUEUE_SIZE;
 }
-static void queue_pop_trade(TradeQueue *q, TradeMsg *trade) {
+void queue_pop_trade(TradeQueue *q, TradeMsg *trade) {
     if (trade_queue_empty(q)) return;
     *trade = q->trades[q->head];
     q->head = (q->head + 1) % MAX_QUEUE_SIZE;
 }
 // AlertQueue functions
-static int alert_queue_empty(AlertQueue *q) { return q->head == q->tail; }
-static int alert_queue_full(AlertQueue *q) { return ((q->tail + 1) % MAX_QUEUE_SIZE) == q->head; }
-static void queue_push_alert(AlertQueue *q, AlertMsg *alert) {
+int alert_queue_empty(AlertQueue *q) { return q->head == q->tail; }
+int alert_queue_full(AlertQueue *q) { return ((q->tail + 1) % MAX_QUEUE_SIZE) == q->head; }
+void queue_push_alert(AlertQueue *q, AlertMsg *alert) {
     if (alert_queue_full(q)) {
       LOG(LOG_WARNING, "Alert queue full, dropping alert for symbol index %d\n", alert->symbol_index);
         return;
@@ -41,14 +39,13 @@ static void queue_push_alert(AlertQueue *q, AlertMsg *alert) {
     q->alerts[q->tail] = *alert;
     q->tail = (q->tail + 1) % MAX_QUEUE_SIZE;
 }
-static void queue_pop_alert(AlertQueue *q, AlertMsg *alert) {
+void queue_pop_alert(AlertQueue *q, AlertMsg *alert) {
     if (alert_queue_empty(q)) return;
     *alert = q->alerts[q->head];
     q->head = (q->head + 1) % MAX_QUEUE_SIZE;
 }
-
 /* ----------------------------- Initialization ----------------------------- */
-static void initialize_state(ScannerState *state) {
+void initialize_state(ScannerState *state) {
     memset(state, 0, sizeof(*state));
     pthread_mutex_init(&state->symbols_mutex, NULL);
 
@@ -60,7 +57,7 @@ static void initialize_state(ScannerState *state) {
     pthread_mutex_init(&state->alert_queue.mutex, NULL);
     pthread_cond_init(&state->alert_queue.cond, NULL);
 }
-static void cleanup_state(ScannerState *state) {
+void cleanup_state(ScannerState *state) {
     // Free symbols
     pthread_mutex_lock(&state->symbols_mutex);
     for (int i = 0; i < state->num_symbols; i++) {
@@ -76,7 +73,7 @@ static void cleanup_state(ScannerState *state) {
 }
 /* ----------------------------- WebSocket Handlers ----------------------------- */
 /* ----------------------------- WebSocket Handlers ----------------------------- */
-static int handle_local_server_connection(ScannerState *state) {
+int handle_local_server_connection(ScannerState *state) {
     if (!state || !state->context) {
         LOG(LOG_ERR, "Invalid state or context when connecting to local server\n");
         return -1;
@@ -100,7 +97,7 @@ static int handle_local_server_connection(ScannerState *state) {
 
     return 0;
 }
-static int handle_finnhub_connection(ScannerState *state) {
+int handle_finnhub_connection(ScannerState *state) {
     if (!state || !state->context) {
         LOG(LOG_ERR, "Invalid state or context when connecting to Finnhub\n");
         return -1;
@@ -125,7 +122,7 @@ static int handle_finnhub_connection(ScannerState *state) {
     return 0;
 }
 /* ----------------------------- Alert Sending ----------------------------- */
-static void send_alert(ScannerState *state, int symbol_idx, double change, double price, int volume) {
+void send_alert(ScannerState *state, int symbol_idx, double change, double price, int volume) {
     if (symbol_idx < 0 || symbol_idx >= state->num_symbols || !state->symbols[symbol_idx]) {
         LOG(LOG_ERR, "Invalid symbol index (%d) or null symbol in send_alert\n", symbol_idx);
         return;
@@ -180,7 +177,7 @@ void enqueue_trade(ScannerState *state, const char *symbol, double price, int vo
     pthread_mutex_unlock(&state->trade_queue.mutex);
 }
 /* ----------------------------- WebSocket Callbacks ----------------------------- */
-static int local_server_callback(struct lws *wsi, enum lws_callback_reasons reason, void *user, void *in, size_t len) {
+int local_server_callback(struct lws *wsi, enum lws_callback_reasons reason, void *user, void *in, size_t len) {
     ScannerState *state = (ScannerState *)lws_context_user(lws_get_context(wsi));
 
     switch (reason) {
@@ -262,7 +259,7 @@ static int local_server_callback(struct lws *wsi, enum lws_callback_reasons reas
     }
     return 0;
 }
-static int finnhub_callback(struct lws *wsi, enum lws_callback_reasons reason, void *user, void *in, size_t len) {
+int finnhub_callback(struct lws *wsi, enum lws_callback_reasons reason, void *user, void *in, size_t len) {
     FinnhubSession *session = (FinnhubSession *)user;
     ScannerState *state = (ScannerState *)lws_context_user(lws_get_context(wsi));
 
