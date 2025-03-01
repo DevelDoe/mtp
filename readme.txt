@@ -29,6 +29,11 @@ sudo systemctl stop mtp
 sudo systemctl start fmp
 sudo systemctl status fmp
 
+// To run them immediately
+
+Start MTP WebSocket Server
+sudo systemctl start mtp.service
+sudo systemctl start fmp.service
 
 // Check Logs
 sudo journalctl -u mtp -f
