@@ -1,14 +1,7 @@
-#include <json-c/json.h>
-#include <libwebsockets.h>
-#include <math.h>
-#include <pthread.h>
-#include <signal.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <time.h>
-#include <syslog.h>
+#include "scanner.h"
 
+
+/* ----------------------------- Utility functions ------------------------------ */
 unsigned long get_current_time_ms() {
     struct timespec ts;
     // You can use CLOCK_REALTIME or CLOCK_MONOTONIC depending on your needs.
@@ -19,124 +12,42 @@ unsigned long get_current_time_ms() {
 void log_message(const char* message) {
     syslog(LOG_INFO, "%s", message);
 }
-
-/* ----------------------------- Configuration ------------------------------ */
-#define DEBUG_MODE 1
-#define MAX_SYMBOLS 50
-#define PRICE_MOVEMENT 1.0  // 1% price movement
-#define DEBOUNCE_TIME 3000  // 3 seconds in milliseconds
-#define LOCAL_SERVER_URI "ws://192.168.1.17:8000/ws"
-#define FINNHUB_URI "wss://ws.finnhub.io/?token=your_token"
-#define MAX_QUEUE_SIZE 1024  // For both trade and alert queues
-
-/* ----------------------------- Helper Macros ------------------------------ */
-#define LOG(fmt, ...) do { \
-    syslog(LOG_INFO, "[%s] " fmt, __func__, ##__VA_ARGS__); \
+#define LOG(level, fmt, ...) do { \
+    if ((level == LOG_DEBUG && DEBUG_MODE) || level != LOG_DEBUG) { \
+        syslog(level, "[%s] " fmt, __func__, ##__VA_ARGS__); \
+    } \
 } while (0)
-
-#define DEBUG_PRINT(fmt, ...) \
-    if (DEBUG_MODE) LOG(fmt, ##__VA_ARGS__)
-
-/* ----------------------------- Data Structures ---------------------------- */
-
-// Trade message (from Finnhub)
-typedef struct {
-    char symbol[32];
-    double price;
-    int volume;
-    unsigned long timestamp;
-} TradeMsg;
-
-// Alert message to be sent to local server
-typedef struct {
-    int symbol_index;
-    double change;  // Signed change (positive or negative)
-    double price;
-    int volume;
-} AlertMsg;
-
-// Thread-safe queue for trades
-typedef struct {
-    TradeMsg trades[MAX_QUEUE_SIZE];
-    int head, tail;
-    pthread_mutex_t mutex;
-    pthread_cond_t cond;
-} TradeQueue;
-
-// Thread-safe queue for alerts
-typedef struct {
-    AlertMsg alerts[MAX_QUEUE_SIZE];
-    int head, tail;
-    pthread_mutex_t mutex;
-    pthread_cond_t cond;
-} AlertQueue;
-
-// Global scanner state; note that we separate the symbols data mutex because
-// symbols may be updated by the local server callback.
-typedef struct {
-    char *symbols[MAX_SYMBOLS];
-    int num_symbols;
-    double last_checked_price[MAX_SYMBOLS];
-    unsigned long last_alert_time[MAX_SYMBOLS];
-
-    // WebSocket connection handles
-    struct lws *wsi_local;
-    struct lws *wsi_finnhub;
-    struct lws_context *context;
-
-    // Queues for inter-thread communication
-    TradeQueue trade_queue;
-    AlertQueue alert_queue;
-
-    // Mutex for protecting symbols array updates
-    pthread_mutex_t symbols_mutex;
-
-    // Global shutdown flag
-    volatile int shutdown_flag;
-
-    char scanner_id[64];  // Store scanner ID
-} ScannerState;
-
-// Session data for Finnhub connection
-typedef struct {
-    int sub_index;
-} FinnhubSession;
+#define DEBUG_PRINT(fmt, ...) LOG(LOG_DEBUG, fmt, ##__VA_ARGS__)
 
 /* ----------------------------- Queue Functions ---------------------------- */
 // TradeQueue functions
 static int trade_queue_empty(TradeQueue *q) { return q->head == q->tail; }
-
 static int trade_queue_full(TradeQueue *q) { return ((q->tail + 1) % MAX_QUEUE_SIZE) == q->head; }
-
 static void queue_push_trade(TradeQueue *q, TradeMsg *trade) {
     if (trade_queue_full(q)) {
-        LOG("Trade queue full, dropping trade\n");
-        return;
+      LOG(LOG_WARNING, "Trade queue full, dropping trade for %s at %.2f\n",
+          trade->symbol, trade->price);
+      return;
     }
     q->trades[q->tail] = *trade;
     q->tail = (q->tail + 1) % MAX_QUEUE_SIZE;
 }
-
 static void queue_pop_trade(TradeQueue *q, TradeMsg *trade) {
     if (trade_queue_empty(q)) return;
     *trade = q->trades[q->head];
     q->head = (q->head + 1) % MAX_QUEUE_SIZE;
 }
-
 // AlertQueue functions
 static int alert_queue_empty(AlertQueue *q) { return q->head == q->tail; }
-
 static int alert_queue_full(AlertQueue *q) { return ((q->tail + 1) % MAX_QUEUE_SIZE) == q->head; }
-
 static void queue_push_alert(AlertQueue *q, AlertMsg *alert) {
     if (alert_queue_full(q)) {
-        LOG("Alert queue full, dropping alert\n");
+      LOG(LOG_WARNING, "Alert queue full, dropping alert for symbol index %d\n", alert->symbol_index);
         return;
     }
     q->alerts[q->tail] = *alert;
     q->tail = (q->tail + 1) % MAX_QUEUE_SIZE;
 }
-
 static void queue_pop_alert(AlertQueue *q, AlertMsg *alert) {
     if (alert_queue_empty(q)) return;
     *alert = q->alerts[q->head];
@@ -156,7 +67,6 @@ static void initialize_state(ScannerState *state) {
     pthread_mutex_init(&state->alert_queue.mutex, NULL);
     pthread_cond_init(&state->alert_queue.cond, NULL);
 }
-
 static void cleanup_state(ScannerState *state) {
     // Free symbols
     pthread_mutex_lock(&state->symbols_mutex);
@@ -171,18 +81,17 @@ static void cleanup_state(ScannerState *state) {
     pthread_mutex_destroy(&state->alert_queue.mutex);
     pthread_cond_destroy(&state->alert_queue.cond);
 }
-
 /* ----------------------------- WebSocket Handlers ----------------------------- */
 static int handle_local_server_connection(ScannerState *state) {
     if (!state || !state->context) {
-        LOG("Invalid state or context\n");
+        LOG(LOG_ERR, "Invalid state or context when connecting to local server\n");
         return -1;
     }
 
     struct lws_client_connect_info ccinfo = {0};
     ccinfo.context = state->context;
-    ccinfo.address = "127.0.0.1";
-    ccinfo.port = 8000;
+    ccinfo.address = LOCAL_ADDRESS;
+    ccinfo.port = LOCAL_PORT;
     ccinfo.path = "/ws";
     ccinfo.host = ccinfo.address;
     ccinfo.origin = ccinfo.address;
@@ -191,25 +100,24 @@ static int handle_local_server_connection(ScannerState *state) {
 
     state->wsi_local = lws_client_connect_via_info(&ccinfo);
     if (!state->wsi_local) {
-        LOG("Failed to connect to local server\n");
+        LOG(LOG_ERR, "Failed to connect to local server\n");
         return -1;
     }
 
-    LOG("Local server connection initiated\n");
+    DEBUG_PRINT("Local server connection established\n");
     return 0;
 }
-
 static int handle_finnhub_connection(ScannerState *state) {
     if (!state || !state->context) {
-        LOG("Invalid state or context\n");
+        LOG(LOG_ERR, "Invalid state or context when connecting to Finnhub\n");
         return -1;
     }
 
     struct lws_client_connect_info ccinfo = {0};
     ccinfo.context = state->context;
-    ccinfo.address = "ws.finnhub.io";
+    ccinfo.address = FINNHUB_ADDRESS;
     ccinfo.port = 443;
-    ccinfo.path = "/?token=cv0q3q1r01qo8ssi98cgcv0q3q1r01qo8ssi98d0";  // Replace with your token
+    ccinfo.path = FINNBUB_KEY;
     ccinfo.host = ccinfo.address;
     ccinfo.origin = ccinfo.address;
     ccinfo.protocol = "finnhub";
@@ -217,18 +125,17 @@ static int handle_finnhub_connection(ScannerState *state) {
 
     state->wsi_finnhub = lws_client_connect_via_info(&ccinfo);
     if (!state->wsi_finnhub) {
-        LOG("Failed to connect to Finnhub\n");
+        LOG(LOG_ERR, "Failed to connect to Finnhub\n");
         return -1;
     }
 
-    LOG("Finnhub connection initiated\n");
+    DEBUG_PRINT("Finnhub connection established\n");
     return 0;
 }
-
 /* ----------------------------- Alert Sending ----------------------------- */
 static void send_alert(ScannerState *state, int symbol_idx, double change, double price, int volume) {
     if (symbol_idx < 0 || symbol_idx >= state->num_symbols || !state->symbols[symbol_idx]) {
-        LOG("Invalid symbol index or null symbol\n");
+        LOG(LOG_ERR, "Invalid symbol index (%d) or null symbol in send_alert\n", symbol_idx);
         return;
     }
 
@@ -248,17 +155,16 @@ static void send_alert(ScannerState *state, int symbol_idx, double change, doubl
 
     if (state->wsi_local && !lws_send_pipe_choked(state->wsi_local)) {
         lws_write(state->wsi_local, p, len, LWS_WRITE_TEXT);
-        LOG("Alert sent: %s\n", payload);
+        DEBUG_PRINT("Alert sent: %s\n", payload);
     } else {
-        LOG("Local server connection unavailable or choked\n");
+        LOG(LOG_ERR, "Local server connection unavailable or choked, alert for %s lost\n",
+            state->symbols[symbol_idx]);
     }
 }
-
 /* ----------------------------- Enqueue Trade ----------------------------- */
-// Called by the Finnhub callback to enqueue a trade for processing.
 void enqueue_trade(ScannerState *state, const char *symbol, double price, int volume) {
     if (!state || !symbol) {
-        LOG("Invalid arguments in enqueue_trade\n");
+        LOG(LOG_ERR, "Invalid arguments in enqueue_trade (symbol: %s)\n", symbol ? symbol : "NULL");
         return;
     }
 
@@ -271,21 +177,23 @@ void enqueue_trade(ScannerState *state, const char *symbol, double price, int vo
 
     pthread_mutex_lock(&state->trade_queue.mutex);
     if (trade_queue_full(&state->trade_queue)) {
-        LOG("Trade queue full, dropping trade\n");
+        LOG(LOG_WARNING, "Trade queue full, dropping trade (symbol: %s, price: %.2f, volume: %d)\n",
+            trade.symbol, trade.price, trade.volume);
     } else {
         queue_push_trade(&state->trade_queue, &trade);
         pthread_cond_signal(&state->trade_queue.cond);
+        DEBUG_PRINT("Trade enqueued: symbol=%s, price=%.2f, volume=%d\n",
+                    trade.symbol, trade.price, trade.volume);
     }
     pthread_mutex_unlock(&state->trade_queue.mutex);
 }
-
 /* ----------------------------- WebSocket Callbacks ----------------------------- */
 static int local_server_callback(struct lws *wsi, enum lws_callback_reasons reason, void *user, void *in, size_t len) {
     ScannerState *state = (ScannerState *)lws_context_user(lws_get_context(wsi));
 
     switch (reason) {
         case LWS_CALLBACK_CLIENT_ESTABLISHED:
-            LOG("Connected to local server\n");
+            DEBUG_PRINT("Connected to local server\n");
             state->wsi_local = wsi;
             {
                 char register_msg[128];
@@ -295,69 +203,68 @@ static int local_server_callback(struct lws *wsi, enum lws_callback_reasons reas
                 size_t msg_len = strlen(register_msg);
                 memcpy(p, register_msg, msg_len);
                 if (lws_write(wsi, p, msg_len, LWS_WRITE_TEXT) < 0)
-                    LOG("Failed to send registration message\n");
+                    LOG(LOG_ERR, "Failed to send registration message to local server\n");
                 else
-                    LOG("Sent registration message: %s\n", register_msg);
+                    DEBUG_PRINT("Sent registration message: %s\n", register_msg);
             }
             break;
 
-            case LWS_CALLBACK_CLIENT_RECEIVE: {
-        // Expecting a JSON with a "symbols" array
-        struct json_object *msg = json_tokener_parse((char *)in);
-        struct json_object *symbols_array;
-        if (json_object_object_get_ex(msg, "symbols", &symbols_array)) {
-            pthread_mutex_lock(&state->symbols_mutex);
+        case LWS_CALLBACK_CLIENT_RECEIVE: {
+            // Expecting a JSON with a "symbols" array
+            struct json_object *msg = json_tokener_parse((char *)in);
+            struct json_object *symbols_array;
+            if (json_object_object_get_ex(msg, "symbols", &symbols_array)) {
+                pthread_mutex_lock(&state->symbols_mutex);
 
-            // Unsubscribe from old symbols
-            if (state->wsi_finnhub) {
-                for (int i = 0; i < state->num_symbols; i++) {
-                    char unsubscribe_msg[128];
-                    snprintf(unsubscribe_msg, sizeof(unsubscribe_msg), "{\"type\":\"unsubscribe\",\"symbol\":\"%s\"}", state->symbols[i]);
-                    unsigned char buf[LWS_PRE + 128];
-                    unsigned char *p = &buf[LWS_PRE];
-                    size_t msg_len = strlen(unsubscribe_msg);
-                    memcpy(p, unsubscribe_msg, msg_len);
-                    lws_write(state->wsi_finnhub, p, msg_len, LWS_WRITE_TEXT);
+                // Unsubscribe from old symbols
+                if (state->wsi_finnhub) {
+                    for (int i = 0; i < state->num_symbols; i++) {
+                        char unsubscribe_msg[128];
+                        snprintf(unsubscribe_msg, sizeof(unsubscribe_msg), "{\"type\":\"unsubscribe\",\"symbol\":\"%s\"}", state->symbols[i]);
+                        unsigned char buf[LWS_PRE + 128];
+                        unsigned char *p = &buf[LWS_PRE];
+                        size_t msg_len = strlen(unsubscribe_msg);
+                        memcpy(p, unsubscribe_msg, msg_len);
+                        lws_write(state->wsi_finnhub, p, msg_len, LWS_WRITE_TEXT);
+                    }
+                    DEBUG_PRINT("Unsubscribed from %d symbols\n", state->num_symbols);
                 }
-                LOG("Unsubscribed from %d symbols\n", state->num_symbols);
+
+                // Free old symbols
+                for (int i = 0; i < state->num_symbols; i++) {
+                    free(state->symbols[i]);
+                    state->symbols[i] = NULL;
+                }
+
+                // Update symbols list
+                state->num_symbols = json_object_array_length(symbols_array);
+                if (state->num_symbols > MAX_SYMBOLS) state->num_symbols = MAX_SYMBOLS;
+                for (int i = 0; i < state->num_symbols; i++) {
+                    const char *sym = json_object_get_string(json_object_array_get_idx(symbols_array, i));
+                    state->symbols[i] = strdup(sym);
+                    // Initialize price tracking values
+                    state->last_checked_price[i] = 0.0;
+                    state->last_alert_time[i] = 0;
+                }
+
+                pthread_mutex_unlock(&state->symbols_mutex);
+
+                // Log the new total number of symbols only in debug mode
+                DEBUG_PRINT("Now subscribing to %d symbols\n", state->num_symbols);
+
+                // Trigger re-subscription on Finnhub
+                if (state->wsi_finnhub) {
+                    FinnhubSession *session = (FinnhubSession *)lws_wsi_user(state->wsi_finnhub);
+                    session->sub_index = 0;  // Reset subscription index
+                    lws_callback_on_writable(state->wsi_finnhub);
+                }
             }
-
-            // Free old symbols
-            for (int i = 0; i < state->num_symbols; i++) {
-                free(state->symbols[i]);
-                state->symbols[i] = NULL;
-            }
-
-            // Update symbols list
-            state->num_symbols = json_object_array_length(symbols_array);
-            if (state->num_symbols > MAX_SYMBOLS) state->num_symbols = MAX_SYMBOLS;
-            for (int i = 0; i < state->num_symbols; i++) {
-                const char *sym = json_object_get_string(json_object_array_get_idx(symbols_array, i));
-                state->symbols[i] = strdup(sym);
-                // Initialize price tracking values
-                state->last_checked_price[i] = 0.0;
-                state->last_alert_time[i] = 0;
-            }
-
-            pthread_mutex_unlock(&state->symbols_mutex);
-
-            // Log the new total number of symbols
-            LOG("Now subscribing to %d symbols\n", state->num_symbols);
-
-            // Trigger re-subscription on Finnhub
-            if (state->wsi_finnhub) {
-                FinnhubSession *session = (FinnhubSession *)lws_wsi_user(state->wsi_finnhub);
-                session->sub_index = 0;  // Reset subscription index
-                lws_callback_on_writable(state->wsi_finnhub);
-            }
+            json_object_put(msg);
+            break;
         }
-        json_object_put(msg);
-        break;
-    }
-
 
         case LWS_CALLBACK_CLIENT_CLOSED:
-            LOG("Local server connection closed\n");
+            LOG(LOG_WARNING, "Local server connection closed, attempting to reconnect...\n");
             state->wsi_local = NULL;
             handle_local_server_connection(state);  // Attempt to reconnect
             break;
@@ -467,10 +374,7 @@ static int finnhub_callback(struct lws *wsi, enum lws_callback_reasons reason, v
     }
     return 0;
 }
-
 /* ----------------------------- Worker Threads ----------------------------- */
-
-// Trade processing thread: reads trades from the trade queue and checks for alerts.
 void* trade_processing_thread(void *lpParam) {
     ScannerState *state = (ScannerState *)lpParam;
     while (!state->shutdown_flag) {
@@ -497,12 +401,16 @@ void* trade_processing_thread(void *lpParam) {
         }
         pthread_mutex_unlock(&state->symbols_mutex);
 
-        if (idx < 0) continue;  // symbol not found
+        if (idx < 0) {
+            DEBUG_PRINT("Trade received but symbol not found: %s\n", trade.symbol);
+            continue;
+        }
 
         // Protect access to last_checked_price and last_alert_time
         pthread_mutex_lock(&state->symbols_mutex);
         double old_price = state->last_checked_price[idx];
         if (old_price <= 0 || isnan(old_price) || isinf(old_price)) {
+            LOG(LOG_WARNING, "Invalid old price for symbol %s: %.2f\n", trade.symbol, old_price);
             state->last_checked_price[idx] = trade.price;
             pthread_mutex_unlock(&state->symbols_mutex);
             continue;
@@ -510,19 +418,24 @@ void* trade_processing_thread(void *lpParam) {
 
         // Get precise current time in milliseconds
         unsigned long current_time = get_current_time_ms();
-
         double change = ((trade.price - old_price) / old_price) * 100.0;
 
         if (fabs(change) >= PRICE_MOVEMENT && (current_time - state->last_alert_time[idx] >= DEBOUNCE_TIME)) {
             AlertMsg alert;
             alert.symbol_index = idx;
-            alert.change = change;  // Pass the signed change
+            alert.change = change;
             alert.price = trade.price;
             alert.volume = trade.volume;
+
             pthread_mutex_lock(&state->alert_queue.mutex);
-            queue_push_alert(&state->alert_queue, &alert);
-            pthread_cond_signal(&state->alert_queue.cond);
+            if (alert_queue_full(&state->alert_queue)) {
+                LOG(LOG_WARNING, "Alert queue full, dropping alert for symbol: %s\n", trade.symbol);
+            } else {
+                queue_push_alert(&state->alert_queue, &alert);
+                pthread_cond_signal(&state->alert_queue.cond);
+            }
             pthread_mutex_unlock(&state->alert_queue.mutex);
+
             state->last_alert_time[idx] = current_time;
         }
 
@@ -532,7 +445,6 @@ void* trade_processing_thread(void *lpParam) {
     }
     return 0;
 }
-// Alert sending thread: reads alerts from the alert queue and sends them.
 void* alert_sending_thread(void *lpParam) {
     ScannerState *state = (ScannerState *)lpParam;
     while (!state->shutdown_flag) {
@@ -549,42 +461,55 @@ void* alert_sending_thread(void *lpParam) {
         pthread_mutex_unlock(&state->alert_queue.mutex);
 
         // Send alert using the local websocket connection.
-        send_alert(state, alert.symbol_index, alert.change, alert.price, alert.volume);
+        if (state->wsi_local && !lws_send_pipe_choked(state->wsi_local)) {
+            send_alert(state, alert.symbol_index, alert.change, alert.price, alert.volume);
+            DEBUG_PRINT("Alert sent for symbol index %d\n", alert.symbol_index);
+        } else {
+            LOG(LOG_WARNING, "Failed to send alert: WebSocket connection unavailable or choked\n");
+        }
     }
     return 0;
 }
-
 /* ----------------------------- Signal Handling ----------------------------- */
 volatile sig_atomic_t shutdown_flag = 0;
 volatile sig_atomic_t restart_flag = 0;
-
 void handle_signal(int sig) {
-    if (sig == SIGINT || sig == SIGTERM) {
-        shutdown_flag = 1;
-    } else if (sig == SIGSEGV || sig == SIGABRT) {
-        restart_flag = 1;
+    switch (sig) {
+        case SIGINT:
+        case SIGTERM:
+            LOG(LOG_NOTICE, "Received signal %d (%s), initiating shutdown...\n", sig, strsignal(sig));
+            shutdown_flag = 1;
+            break;
+
+        case SIGSEGV:
+        case SIGABRT:
+            LOG(LOG_ERR, "Critical error: signal %d (%s) received, restarting program...\n", sig, strsignal(sig));
+            restart_flag = 1;
+            break;
+
+        default:
+            DEBUG_PRINT("Unhandled signal received: %d (%s)\n", sig, strsignal(sig));
+            break;
     }
 }
-
 void setup_signal_handlers() {
     struct sigaction sa;
     sa.sa_handler = handle_signal;
     sigemptyset(&sa.sa_mask);
-    sa.sa_flags = 0;
+    sa.sa_flags = SA_RESTART; // Ensures interrupted syscalls are restarted
 
     sigaction(SIGINT, &sa, NULL);
     sigaction(SIGTERM, &sa, NULL);
     sigaction(SIGSEGV, &sa, NULL);
     sigaction(SIGABRT, &sa, NULL);
 }
-
 /* ----------------------------- Main Function ----------------------------- */
 int main(int argc, char *argv[]) {
     openlog("scanner", LOG_PID | LOG_CONS, LOG_USER);  // Open syslog
-    LOG("Scanner started\n");
+    LOG(LOG_NOTICE, "Scanner started\n");
 
     if (argc < 2) {
-        fprintf(stderr, "Usage: %s {scanner_id}\n", argv[0]);
+        LOG(LOG_ERR, "Invalid usage: Scanner ID missing. Usage: %s {scanner_id}\n", argv[0]);
         return 1;
     }
 
@@ -600,6 +525,8 @@ int main(int argc, char *argv[]) {
         strncpy(state.scanner_id, scanner_id, sizeof(state.scanner_id) - 1);
         state.scanner_id[sizeof(state.scanner_id) - 1] = '\0';
 
+        LOG(LOG_INFO, "Scanner initialized with ID: %s\n", scanner_id);
+
         struct lws_protocols protocols[] = {
             {"local-server", local_server_callback, 0, 0},
             {"finnhub", finnhub_callback, sizeof(FinnhubSession), 0},
@@ -613,31 +540,29 @@ int main(int argc, char *argv[]) {
 
         state.context = lws_create_context(&info);
         if (!state.context) {
-            LOG("lws_create_context failed\n");
+            LOG(LOG_ERR, "lws_create_context failed, terminating program\n");
             cleanup_state(&state);
             return -1;
         }
-
-        LOG("Scanner ID: %s\n", scanner_id);
 
         handle_local_server_connection(&state);
         handle_finnhub_connection(&state);
 
         pthread_t hTradeThread, hAlertThread;
         if (pthread_create(&hTradeThread, NULL, trade_processing_thread, &state) != 0) {
-            LOG("Failed to create trade processing thread\n");
+            LOG(LOG_ERR, "Failed to create trade processing thread\n");
             cleanup_state(&state);
             return -1;
         }
         if (pthread_create(&hAlertThread, NULL, alert_sending_thread, &state) != 0) {
-            LOG("Failed to create alert sending thread\n");
+            LOG(LOG_ERR, "Failed to create alert sending thread\n");
             cleanup_state(&state);
             return -1;
         }
 
         while (!shutdown_flag && !restart_flag) {
             lws_service(state.context, 50);
-            DEBUG_PRINT("Running WebSocket event loop\n");
+            DEBUG_PRINT("Running WebSocket event loop\n"); // Debug only
         }
 
         state.shutdown_flag = 1;
@@ -650,13 +575,12 @@ int main(int argc, char *argv[]) {
         cleanup_state(&state);
 
         if (restart_flag) {
-            LOG("Restarting program due to crash...\n");
+            LOG(LOG_ERR, "Restarting program due to crash...\n");
             restart_flag = 0;
         }
     }
 
-
-    LOG("Program shutdown gracefully.\n");
+    LOG(LOG_NOTICE, "Program shutdown gracefully.\n");
     closelog();
     return 0;
 }
