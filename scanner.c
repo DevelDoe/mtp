@@ -11,12 +11,6 @@ unsigned long get_current_time_ms() {
 void log_message(const char* message) {
     syslog(LOG_INFO, "%s", message);
 }
-#define LOG(level, fmt, ...) do { \
-    if ((level == LOG_DEBUG && DEBUG_MODE) || level != LOG_DEBUG) { \
-        syslog(level, "[%s] " fmt, __func__, ##__VA_ARGS__); \
-    } \
-} while (0)
-#define DEBUG_PRINT(fmt, ...) LOG(LOG_DEBUG, fmt, ##__VA_ARGS__)
 
 /* ----------------------------- Queue Functions ---------------------------- */
 // TradeQueue functions
@@ -84,7 +78,7 @@ static void cleanup_state(ScannerState *state) {
 /* ----------------------------- WebSocket Handlers ----------------------------- */
 static int handle_local_server_connection(ScannerState *state) {
     if (!state || !state->context) {
-        LOG("Error: Invalid state or context when connecting to local server\n");
+        LOG(LOG_ERR, "Invalid state or context when connecting to local server\n");
         return -1;
     }
 
@@ -100,17 +94,15 @@ static int handle_local_server_connection(ScannerState *state) {
 
     state->wsi_local = lws_client_connect_via_info(&ccinfo);
     if (!state->wsi_local) {
-        LOG("Error: Failed to connect to local server\n");
+        LOG(LOG_ERR, "Failed to initiateo local server\n");
         return -1;
     }
 
-    DEBUG_PRINT("Local server connection established\n");
     return 0;
 }
-
 static int handle_finnhub_connection(ScannerState *state) {
     if (!state || !state->context) {
-        LOG("Error: Invalid state or context when connecting to Finnhub\n");
+        LOG(LOG_ERR, "Invalid state or context when connecting to Finnhub\n");
         return -1;
     }
 
@@ -126,11 +118,10 @@ static int handle_finnhub_connection(ScannerState *state) {
 
     state->wsi_finnhub = lws_client_connect_via_info(&ccinfo);
     if (!state->wsi_finnhub) {
-        LOG("Error: Failed to connect to Finnhub\n");
+        LOG(LOG_ERR, "Failed to initiate Finnhub connection\n");
         return -1;
     }
 
-    DEBUG_PRINT("Finnhub connection established\n");
     return 0;
 }
 /* ----------------------------- Alert Sending ----------------------------- */
@@ -194,7 +185,7 @@ static int local_server_callback(struct lws *wsi, enum lws_callback_reasons reas
 
     switch (reason) {
         case LWS_CALLBACK_CLIENT_ESTABLISHED:
-            DEBUG_PRINT("Connected to local server\n");
+            LOG(LOG_NOTICE, "Connected to local server\n");
             state->wsi_local = wsi;
             {
                 char register_msg[128];
@@ -211,7 +202,6 @@ static int local_server_callback(struct lws *wsi, enum lws_callback_reasons reas
             break;
 
         case LWS_CALLBACK_CLIENT_RECEIVE: {
-            // Expecting a JSON with a "symbols" array
             struct json_object *msg = json_tokener_parse((char *)in);
             struct json_object *symbols_array;
             if (json_object_object_get_ex(msg, "symbols", &symbols_array)) {
@@ -243,20 +233,17 @@ static int local_server_callback(struct lws *wsi, enum lws_callback_reasons reas
                 for (int i = 0; i < state->num_symbols; i++) {
                     const char *sym = json_object_get_string(json_object_array_get_idx(symbols_array, i));
                     state->symbols[i] = strdup(sym);
-                    // Initialize price tracking values
                     state->last_checked_price[i] = 0.0;
                     state->last_alert_time[i] = 0;
                 }
 
                 pthread_mutex_unlock(&state->symbols_mutex);
-
-                // Log the new total number of symbols only in debug mode
                 DEBUG_PRINT("Now subscribing to %d symbols\n", state->num_symbols);
 
                 // Trigger re-subscription on Finnhub
                 if (state->wsi_finnhub) {
                     FinnhubSession *session = (FinnhubSession *)lws_wsi_user(state->wsi_finnhub);
-                    session->sub_index = 0;  // Reset subscription index
+                    session->sub_index = 0;
                     lws_callback_on_writable(state->wsi_finnhub);
                 }
             }
@@ -265,9 +252,9 @@ static int local_server_callback(struct lws *wsi, enum lws_callback_reasons reas
         }
 
         case LWS_CALLBACK_CLIENT_CLOSED:
-            LOG(LOG_WARNING, "Local server connection closed, attempting to reconnect...\n");
+            LOG(LOG_NOTICE, "Local server connection closed, attempting to reconnect...\n");
             state->wsi_local = NULL;
-            handle_local_server_connection(state);  // Attempt to reconnect
+            handle_local_server_connection(state);
             break;
 
         default:
@@ -275,98 +262,73 @@ static int local_server_callback(struct lws *wsi, enum lws_callback_reasons reas
     }
     return 0;
 }
-
 static int finnhub_callback(struct lws *wsi, enum lws_callback_reasons reason, void *user, void *in, size_t len) {
     FinnhubSession *session = (FinnhubSession *)user;
     ScannerState *state = (ScannerState *)lws_context_user(lws_get_context(wsi));
 
     switch (reason) {
         case LWS_CALLBACK_CLIENT_ESTABLISHED:
-            LOG("Connected to Finnhub\n");
+            LOG(LOG_NOTICE, "Connected to Finnhub\n");
             lws_callback_on_writable(wsi);
             break;
 
-            case LWS_CALLBACK_CLIENT_WRITEABLE:
-        if (session->sub_index < state->num_symbols) {
-            char subscribe_msg[128];
-            pthread_mutex_lock(&state->symbols_mutex);
+        case LWS_CALLBACK_CLIENT_WRITEABLE:
             if (session->sub_index < state->num_symbols) {
-                snprintf(subscribe_msg, sizeof(subscribe_msg), "{\"type\":\"subscribe\",\"symbol\":\"%s\"}", state->symbols[session->sub_index]);
+                char subscribe_msg[128];
+                pthread_mutex_lock(&state->symbols_mutex);
+                if (session->sub_index < state->num_symbols) {
+                    snprintf(subscribe_msg, sizeof(subscribe_msg), "{\"type\":\"subscribe\",\"symbol\":\"%s\"}", state->symbols[session->sub_index]);
+                }
+                pthread_mutex_unlock(&state->symbols_mutex);
+                unsigned char buf[LWS_PRE + 128];
+                unsigned char *p = &buf[LWS_PRE];
+                size_t msg_len = strlen(subscribe_msg);
+                memcpy(p, subscribe_msg, msg_len);
+                lws_write(wsi, p, msg_len, LWS_WRITE_TEXT);
+
+                if (session->sub_index == 0) {
+                    LOG(LOG_INFO, "Total symbols subscribed: %d\n", state->num_symbols);
+                }
+
+                DEBUG_PRINT("Subscribed to: %s\n", subscribe_msg);
+                session->sub_index++;
+                if (session->sub_index < state->num_symbols) lws_callback_on_writable(wsi);
             }
-            pthread_mutex_unlock(&state->symbols_mutex);
-            unsigned char buf[LWS_PRE + 128];
-            unsigned char *p = &buf[LWS_PRE];
-            size_t msg_len = strlen(subscribe_msg);
-            memcpy(p, subscribe_msg, msg_len);
-            lws_write(wsi, p, msg_len, LWS_WRITE_TEXT);
+            break;
 
-            // Print the total number of symbols once instead of each symbol
-            if (session->sub_index == 0) {
-                LOG("Total symbols subscribed: %d\n", state->num_symbols);
-            }
+        case LWS_CALLBACK_CLIENT_RECEIVE:
+            LOG(LOG_DEBUG, "Finnhub received data: %.*s\n", (int)len, (char *)in);
 
-            DEBUG_PRINT("Subscribed to: %s\n", subscribe_msg);
-
-            session->sub_index++;
-            if (session->sub_index < state->num_symbols) lws_callback_on_writable(wsi);
-        }
-        break;
-
-
-        case LWS_CALLBACK_CLIENT_RECEIVE: {
-            LOG("Finnhub received data: %.*s\n", (int)len, (char *)in);
-            // Ignore ping messages
             if (len == 4 && strncmp((char *)in, "ping", 4) == 0) {
-                LOG("Ignored ping message.\n");
+                LOG(LOG_DEBUG, "Ignored ping message.\n");
                 break;
             }
             struct json_object *msg = json_tokener_parse((char *)in);
             if (!msg) {
-                LOG("Failed to parse JSON message: %.*s\n", (int)len, (char *)in);
+                LOG(LOG_ERR, "Failed to parse JSON message: %.*s\n", (int)len, (char *)in);
                 break;
             }
-            // If error type, log and ignore
+
             struct json_object *type_obj;
             if (json_object_object_get_ex(msg, "type", &type_obj)) {
                 const char *msg_type = json_object_get_string(type_obj);
                 if (strcmp(msg_type, "error") == 0) {
-                    LOG("Error message received: %s\n", json_object_to_json_string(msg));
+                    LOG(LOG_ERR, "Error message received: %s\n", json_object_to_json_string(msg));
                     json_object_put(msg);
                     break;
                 }
             }
-            // Process the "data" array of trades
-            struct json_object *data_array;
-            if (!json_object_object_get_ex(msg, "data", &data_array) || json_object_get_type(data_array) != json_type_array) {
-                LOG("JSON does not contain a valid 'data' array. Ignoring message.\n");
-                json_object_put(msg);
-                break;
-            }
-            int arr_len = json_object_array_length(data_array);
-            for (int i = 0; i < arr_len; i++) {
-                struct json_object *trade_obj = json_object_array_get_idx(data_array, i);
-                struct json_object *sym_obj, *price_obj, *vol_obj;
-                if (json_object_object_get_ex(trade_obj, "s", &sym_obj) && json_object_object_get_ex(trade_obj, "p", &price_obj) && json_object_object_get_ex(trade_obj, "v", &vol_obj)) {
-                    const char *symbol = json_object_get_string(sym_obj);
-                    double price = json_object_get_double(price_obj);
-                    int volume = json_object_get_int(vol_obj);
-                    LOG("Received trade: symbol=%s, price=%.2f, volume=%d\n", symbol, price, volume);
-                    enqueue_trade(state, symbol, price, volume);
-                } else {
-                    LOG("Missing required trade data fields. Skipping entry.\n");
-                }
-            }
+
             json_object_put(msg);
             break;
-        }
 
         case LWS_CALLBACK_CLIENT_CONNECTION_ERROR:
-            LOG("Finnhub connection error: %s\n", in ? (char *)in : "Unknown error");
+            LOG(LOG_ERR, "Finnhub connection error: %s\n", in ? (char *)in : "Unknown error");
             handle_finnhub_connection(state);
             break;
 
         case LWS_CALLBACK_CLOSED:
-            LOG("Finnhub connection closed\n");
+            LOG(LOG_NOTICE, "Finnhub connection closed\n");
             handle_finnhub_connection(state);
             break;
 

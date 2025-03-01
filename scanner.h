@@ -15,7 +15,7 @@
 /* ---------------------- Configuration Macros ---------------------- */
 
 // Debug Mode (set to 1 for extra logging, 0 for minimal logging)
-#define DEBUG_MODE 0  // Change to 1 for debugging
+#define DEBUG_MODE 1  // Change to 1 for debugging
 
 // General Limits
 #define MAX_SYMBOLS 50
@@ -33,10 +33,12 @@
 
 /* ---------------------- Logging Macros ---------------------- */
 
-// Logging Macros (syslog or debug output)
-#define LOG(fmt, ...) syslog(LOG_INFO, "[%s] " fmt, __func__, ##__VA_ARGS__)
-#define DEBUG_PRINT(fmt, ...) \
-    if (DEBUG_MODE) LOG(fmt, ##__VA_ARGS__)
+#define LOG(level, fmt, ...) do { \
+    if ((level == LOG_DEBUG && DEBUG_MODE) || level != LOG_DEBUG) { \
+        syslog(level, "[%s] " fmt, __func__, ##__VA_ARGS__); \
+    } \
+} while (0)
+#define DEBUG_PRINT(fmt, ...) LOG(LOG_DEBUG, fmt, ##__VA_ARGS__)
 
 /* ---------------------- Struct & Type Definitions ---------------------- */
 
