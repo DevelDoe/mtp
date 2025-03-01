@@ -97,7 +97,7 @@ typedef struct {
 
 // Utility functions
 unsigned long get_current_time_ms();
-void log_message(const char* message);
+void log_message(int level, const char *fmt, ...);
 
 // Signal Handling
 void handle_signal(int sig);
