@@ -1,6 +1,5 @@
 #include "scanner.h"
 
-
 /* ----------------------------- Utility functions ------------------------------ */
 unsigned long get_current_time_ms() {
     struct timespec ts;
