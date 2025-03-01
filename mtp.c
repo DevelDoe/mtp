@@ -27,7 +27,8 @@ static void add_client(const char *client_id, struct mg_connection *conn, bool i
     node->is_scanner = is_scanner;  // Set the scanner flag
     node->next = client_map;
     client_map = node;
-    printf("[SERVER] Registered client: %s (scanner: %d)\n", client_id, is_scanner);
+
+    LOG(LOG_INFO, "Registered client: %s (scanner: %d)", client_id, is_scanner);
 }
 
 static void remove_client(struct mg_connection *conn) {
@@ -36,7 +37,7 @@ static void remove_client(struct mg_connection *conn) {
         if ((*curr)->conn == conn) {
             ClientNode *tmp = *curr;
             *curr = (*curr)->next;
-            printf("[SERVER] Removed client: %s (scanner: %d)\n", tmp->client_id, tmp->is_scanner);
+            LOG(LOG_INFO, "Removed client: %s (scanner: %d)", tmp->client_id, tmp->is_scanner);
             free(tmp);
 
             // Redistribute symbols if a scanner was removed
@@ -69,21 +70,26 @@ static void send_symbols_to_scanner(struct mg_connection *scanner, const char **
     // Send the symbols to the scanner
     mg_ws_send(scanner, data, strlen(data), WEBSOCKET_OP_TEXT);
     json_object_put(root);
+
+    LOG(LOG_INFO, "Sent %d symbols to scanner", num_symbols);
 }
 
 static void broadcast_alert(const char *alert_data) {
-    printf("[SERVER] Broadcasting alert to all clients: %s\n", alert_data);
+    LOG(LOG_INFO, "Broadcasting alert to all clients: %s", alert_data);
     for (ClientNode *curr = client_map; curr; curr = curr->next) {
         // Broadcast alert to all clients except scanners
         if (!curr->is_scanner) {
-            printf("[SERVER] Sending alert to client: %s\n", curr->client_id);
+            LOG(LOG_INFO, "Sending alert to client: %s", curr->client_id);
             mg_ws_send(curr->conn, alert_data, strlen(alert_data), WEBSOCKET_OP_TEXT);
         }
     }
 }
 
 static void distribute_symbols_to_scanners() {
-    if (!stored_symbols || stored_symbols_count == 0) return;
+    if (!stored_symbols || stored_symbols_count == 0) {
+        LOG(LOG_WARNING, "No stored symbols to distribute.");
+        return;
+    }
 
     int total = stored_symbols_count;
     int num_scanners = 0;
@@ -94,7 +100,7 @@ static void distribute_symbols_to_scanners() {
     }
 
     if (num_scanners == 0) {
-        printf("[SERVER] No scanners connected. Symbols not distributed.\n");
+        LOG(LOG_WARNING, "No scanners connected. Symbols not distributed.");
         return;
     }
 
@@ -116,12 +122,12 @@ static void distribute_symbols_to_scanners() {
         curr = curr->next;
     }
 
-    printf("[SERVER] Distributed %d symbols to %d scanners\n", sent, num_scanners);
+    LOG(LOG_INFO, "Distributed %d symbols to %d scanners", sent, num_scanners);
 }
 
 /* ------------------------- HTTP Handlers ---------------------------------- */
 static void handle_root(struct mg_connection *c) {
-    printf("[SERVER] Received request for root endpoint\n");
+    LOG(LOG_INFO, "Received request for root endpoint");
     mg_http_reply(c, 200, "Content-Type: application/json\r\n", "{\"status\": \"Server is running\"}");
 }
 
@@ -138,14 +144,14 @@ static void handle_ws_upgrade(struct mg_connection *c, struct mg_http_message *h
 }
 
 static void handle_scanner_update(struct mg_connection *c, struct mg_http_message *hm) {
-    printf("[SERVER] Received symbol update request\n");
+    LOG(LOG_INFO, "Received symbol update request");
 
     struct json_object *root = json_tokener_parse(hm->body.ptr);
     struct json_object *client_id_obj, *data_obj;
 
     if (!root || !json_object_object_get_ex(root, "client_id", &client_id_obj) ||
                !json_object_object_get_ex(root, "data", &data_obj)) {
-        printf("[SERVER] Invalid symbol update request format\n");
+        LOG(LOG_WARNING, "Invalid symbol update request format");
         mg_http_reply(c, 400, "Content-Type: application/json\r\n", "{\"error\": \"Invalid request format\"}");
         if (root) json_object_put(root);
         return;
@@ -155,13 +161,7 @@ static void handle_scanner_update(struct mg_connection *c, struct mg_http_messag
     struct json_object *symbols_array = json_object_object_get(data_obj, "symbols");
     int num_symbols = json_object_array_length(symbols_array);
 
-    // Log the symbols being processed
-    printf("[SERVER] Processing %d symbols:\n", num_symbols);
-    for (int i = 0; i < num_symbols; i++) {
-        struct json_object *item = json_object_array_get_idx(symbols_array, i);
-        const char *symbol = json_object_get_string(item);
-        printf("  - %s\n", symbol);
-    }
+    LOG(LOG_INFO, "Processing %d symbols from client: %s", num_symbols, client_id);
 
     // Free existing symbols
     if (stored_symbols) {
@@ -177,6 +177,8 @@ static void handle_scanner_update(struct mg_connection *c, struct mg_http_messag
     }
     stored_symbols_count = num_symbols;
 
+    LOG(LOG_INFO, "Updated stored symbols. Total: %d", stored_symbols_count);
+
     // Distribute symbols to scanners
     distribute_symbols_to_scanners();
 
@@ -186,45 +188,40 @@ static void handle_scanner_update(struct mg_connection *c, struct mg_http_messag
 
 /* ---------------------- WebSocket Handlers ------------------------------- */
 static void handle_ws_message(struct mg_connection *c, struct mg_ws_message *wm) {
-    printf("[SERVER] Received WebSocket message: %.*s\n", (int)wm->data.len, wm->data.ptr);
+    LOG(LOG_INFO, "Received WebSocket message: %.*s", (int)wm->data.len, wm->data.ptr);
 
     struct json_object *root = json_tokener_parse(wm->data.ptr);
     if (!root) {
-        printf("[SERVER] Invalid WebSocket message format\n");
+        LOG(LOG_WARNING, "Invalid WebSocket message format");
         return;
     }
 
     struct json_object *client_id_obj;
     if (!json_object_object_get_ex(root, "client_id", &client_id_obj)) {
-        printf("[SERVER] Missing client_id in WebSocket message\n");
+        LOG(LOG_WARNING, "Missing client_id in WebSocket message");
         json_object_put(root);
         return;
     }
 
     const char *client_id = json_object_get_string(client_id_obj);
-
-    // Determine if client is a scanner (e.g., client_id starts with "ss")
     bool is_scanner = (strncmp(client_id, "ss", 2) == 0);
 
     // Register new client if not already registered
     if (!find_client(client_id)) {
-        printf("[SERVER] Registering new client: %s (scanner: %d)\n", client_id, is_scanner);
+        LOG(LOG_INFO, "Registering new client: %s (scanner: %d)", client_id, is_scanner);
         add_client(client_id, c, is_scanner);
 
-        // Redistribute symbols if this is a new scanner
         if (is_scanner) {
             distribute_symbols_to_scanners();
         }
     }
 
     // Handle scanner alerts
-    if (is_scanner) {
-        struct json_object *data_obj;
-        if (json_object_object_get_ex(root, "data", &data_obj)) {
-            const char *alert = json_object_to_json_string(data_obj);
-            printf("[SERVER] Received alert from scanner: %s\n", alert);
-            broadcast_alert(alert);  // Broadcast the alert to all clients
-        }
+    struct json_object *data_obj;
+    if (is_scanner && json_object_object_get_ex(root, "data", &data_obj)) {
+        const char *alert = json_object_to_json_string(data_obj);
+        LOG(LOG_INFO, "Received alert from scanner: %s", alert);
+        broadcast_alert(alert);
     }
 
     json_object_put(root);
@@ -243,7 +240,7 @@ static void event_handler(struct mg_connection *c, int ev, void *ev_data) {
             } else if (mg_http_match_uri(hm, "/update-scanner-symbols")) {
                 handle_scanner_update(c, hm);
             } else {
-                printf("[SERVER] Received request for unknown endpoint: %.*s\n", (int)hm->uri.len, hm->uri.ptr);
+                LOG(LOG_WARNING, "Received request for unknown endpoint: %.*s", (int)hm->uri.len, hm->uri.ptr);
                 mg_http_reply(c, 404, NULL, "Not Found");
             }
             break;
@@ -254,33 +251,40 @@ static void event_handler(struct mg_connection *c, int ev, void *ev_data) {
             if (wm->flags & WEBSOCKET_OP_TEXT) {
                 handle_ws_message(c, wm);
             } else {
-                printf("[SERVER] Received non-text WebSocket frame (opcode: %d)\n", wm->flags & 0x0F);
+                LOG(LOG_WARNING, "Received non-text WebSocket frame (opcode: %d)", wm->flags & 0x0F);
             }
             break;
         }
 
         case MG_EV_WS_OPEN:
-            printf("[SERVER] WebSocket connection opened\n");
+            LOG(LOG_INFO, "WebSocket connection opened");
             break;
 
         case MG_EV_CLOSE:
             if (c->is_websocket) {
-                printf("[SERVER] WebSocket connection closed\n");
+                LOG(LOG_INFO, "WebSocket connection closed");
                 remove_client(c);
             }
             break;
     }
 }
 
+
 /* ---------------------------- Main Function ------------------------------ */
 int main(void) {
+    LOG(LOG_NOTICE, "Starting WebSocket Server on %s", s_listen_url);
+
     struct mg_mgr mgr;
     mg_mgr_init(&mgr);
     mg_http_listen(&mgr, s_listen_url, event_handler, NULL);
-    printf("[SERVER] Server started on %s\n", s_listen_url);
 
-    while (true) mg_mgr_poll(&mgr, 1000);
+    LOG(LOG_NOTICE, "Server started successfully. Listening for connections...");
+
+    while (true) {
+        mg_mgr_poll(&mgr, 1000);
+    }
 
     mg_mgr_free(&mgr);
+    LOG(LOG_NOTICE, "Server shutting down.");
     return 0;
 }
