@@ -16,7 +16,7 @@
 /* ---------------------- Configuration Macros ---------------------- */
 
 // Debug Mode (set to 1 for extra logging, 0 for minimal logging)
-#define DEBUG_MODE 1  // Change to 1 for debugging
+#define DEBUG_MODE 0  // Change to 1 for debugging
 
 // General Limits
 #define MAX_SYMBOLS 50
