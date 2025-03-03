@@ -230,55 +230,93 @@ static int local_server_callback(struct lws *wsi, enum lws_callback_reasons reas
             }
             break;
 
-        case LWS_CALLBACK_CLIENT_RECEIVE: {
-            struct json_object *msg = json_tokener_parse((char *)in);
-            struct json_object *symbols_array;
-            if (json_object_object_get_ex(msg, "symbols", &symbols_array)) {
+            case LWS_CALLBACK_CLIENT_RECEIVE: {
+              struct json_object *msg = json_tokener_parse((char *)in);
+              struct json_object *symbols_array;
+              if (json_object_object_get_ex(msg, "symbols", &symbols_array)) {
                 pthread_mutex_lock(&state->symbols_mutex);
+
+                // Save old symbols and their data
+                char *old_symbols[MAX_SYMBOLS] = {0};
+                double old_last_checked_price[MAX_SYMBOLS] = {0};
+                unsigned long old_last_alert_time[MAX_SYMBOLS] = {0};
+                int old_num_symbols = state->num_symbols;
+
+                for (int i = 0; i < old_num_symbols; i++) {
+                  old_symbols[i] = strdup(state->symbols[i]);
+                  old_last_checked_price[i] = state->last_checked_price[i];
+                  old_last_alert_time[i] = state->last_alert_time[i];
+                }
 
                 // Unsubscribe from old symbols
                 if (state->wsi_finnhub) {
-                    for (int i = 0; i < state->num_symbols; i++) {
-                        char unsubscribe_msg[128];
-                        snprintf(unsubscribe_msg, sizeof(unsubscribe_msg), "{\"type\":\"unsubscribe\",\"symbol\":\"%s\"}", state->symbols[i]);
-                        unsigned char buf[LWS_PRE + 128];
-                        unsigned char *p = &buf[LWS_PRE];
-                        size_t msg_len = strlen(unsubscribe_msg);
-                        memcpy(p, unsubscribe_msg, msg_len);
-                        lws_write(state->wsi_finnhub, p, msg_len, LWS_WRITE_TEXT);
-                    }
-                    DEBUG_PRINT("Unsubscribed from %d symbols\n", state->num_symbols);
+                  for (int i = 0; i < old_num_symbols; i++) {
+                    char unsubscribe_msg[128];
+                    snprintf(unsubscribe_msg, sizeof(unsubscribe_msg), "{\"type\":\"unsubscribe\",\"symbol\":\"%s\"}", old_symbols[i]);
+                    unsigned char buf[LWS_PRE + 128];
+                    unsigned char *p = &buf[LWS_PRE];
+                    size_t msg_len = strlen(unsubscribe_msg);
+                    memcpy(p, unsubscribe_msg, msg_len);
+                    lws_write(state->wsi_finnhub, p, msg_len, LWS_WRITE_TEXT);
+                  }
+                  DEBUG_PRINT("Unsubscribed from %d old symbols\n", old_num_symbols);
                 }
 
                 // Free old symbols
-                for (int i = 0; i < state->num_symbols; i++) {
-                    free(state->symbols[i]);
-                    state->symbols[i] = NULL;
+                for (int i = 0; i < old_num_symbols; i++) {
+                  free(state->symbols[i]);
+                  state->symbols[i] = NULL;
                 }
 
-                // Update symbols list
-                state->num_symbols = json_object_array_length(symbols_array);
-                if (state->num_symbols > MAX_SYMBOLS) state->num_symbols = MAX_SYMBOLS;
-                for (int i = 0; i < state->num_symbols; i++) {
-                    const char *sym = json_object_get_string(json_object_array_get_idx(symbols_array, i));
-                    state->symbols[i] = strdup(sym);
-                    state->last_checked_price[i] = 0.0;
-                    state->last_alert_time[i] = 0;
+                // Process new symbols
+    state->num_symbols = json_object_array_length(symbols_array);
+    if (state->num_symbols > MAX_SYMBOLS) state->num_symbols = MAX_SYMBOLS;
+
+    int preserved_count = 0;  // Declare counter here
+    for (int i = 0; i < state->num_symbols; i++) {
+        const char *sym = json_object_get_string(json_object_array_get_idx(symbols_array, i));
+        state->symbols[i] = strdup(sym);
+
+        // Check if this symbol existed in old list
+        int found = -1;
+        for (int j = 0; j < old_num_symbols; j++) {
+            if (old_symbols[j] && strcmp(sym, old_symbols[j]) == 0) {
+                found = j;
+                break;
+            }
+        }
+
+        if (found != -1) {
+            // Preserve price and alert time
+            state->last_checked_price[i] = old_last_checked_price[found];
+            state->last_alert_time[i] = old_last_alert_time[found];
+            preserved_count++;  // Increment counter
+        } else {
+            // Initialize new symbol
+            state->last_checked_price[i] = 0.0;
+            state->last_alert_time[i] = 0;
+        }
+    }
+
+                // Free temporary old symbols
+                for (int i = 0; i < old_num_symbols; i++) {
+                  free(old_symbols[i]);
                 }
 
                 pthread_mutex_unlock(&state->symbols_mutex);
-                DEBUG_PRINT("Now subscribing to %d symbols\n", state->num_symbols);
+                DEBUG_PRINT("Now subscribing to %d symbols (preserved %d old entries)\n",
+                state->num_symbols, preserved_count);  // Now valid
 
                 // Trigger re-subscription on Finnhub
                 if (state->wsi_finnhub) {
-                    FinnhubSession *session = (FinnhubSession *)lws_wsi_user(state->wsi_finnhub);
-                    session->sub_index = 0;
-                    lws_callback_on_writable(state->wsi_finnhub);
+                  FinnhubSession *session = (FinnhubSession *)lws_wsi_user(state->wsi_finnhub);
+                  session->sub_index = 0;
+                  lws_callback_on_writable(state->wsi_finnhub);
                 }
+              }
+              json_object_put(msg);
+              break;
             }
-            json_object_put(msg);
-            break;
-        }
 
         case LWS_CALLBACK_CLIENT_CLOSED:
             LOG(LOG_NOTICE, "Local server connection closed, attempting to reconnect...\n");
