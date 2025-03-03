@@ -112,18 +112,6 @@ static void distribute_symbols_to_scanners() {
 
     int sent = 0;
 
-    // Free previous scanner assignments
-    while (scanner_symbols_list) {
-        ScannerSymbols *tmp = scanner_symbols_list;
-        scanner_symbols_list = scanner_symbols_list->next;
-        for (int i = 0; i < tmp->symbol_count; i++) {
-            free((char *)tmp->symbols[i]);
-        }
-        free(tmp->symbols);
-        free(tmp);
-    }
-
-    // Assign symbols to scanners
     for (ClientNode *curr = client_map; curr; curr = curr->next) {
         if (!curr->is_scanner) continue;
 
@@ -136,13 +124,36 @@ static void distribute_symbols_to_scanners() {
             assigned_symbols[i] = strdup(stored_symbols[sent + i]); // Copy symbol names
         }
 
-        // Store scanner-symbol assignment
-        ScannerSymbols *new_entry = malloc(sizeof(ScannerSymbols));
-        snprintf(new_entry->client_id, sizeof(new_entry->client_id), "%s", curr->client_id);
-        new_entry->symbols = assigned_symbols;
-        new_entry->symbol_count = symbols_to_assign;
-        new_entry->next = scanner_symbols_list;
-        scanner_symbols_list = new_entry;
+        // Check if scanner already exists in the list
+        ScannerSymbols *scanner_entry = scanner_symbols_list;
+        ScannerSymbols *prev = NULL;
+        while (scanner_entry) {
+            if (strcmp(scanner_entry->client_id, curr->client_id) == 0) {
+                break;  // Scanner already exists
+            }
+            prev = scanner_entry;
+            scanner_entry = scanner_entry->next;
+        }
+
+        if (scanner_entry) {
+            // Update existing scanner entry
+            free(scanner_entry->symbols);  // Free old symbols
+            scanner_entry->symbols = assigned_symbols;
+            scanner_entry->symbol_count = symbols_to_assign;
+        } else {
+            // Add new scanner entry
+            ScannerSymbols *new_entry = malloc(sizeof(ScannerSymbols));
+            snprintf(new_entry->client_id, sizeof(new_entry->client_id), "%s", curr->client_id);
+            new_entry->symbols = assigned_symbols;
+            new_entry->symbol_count = symbols_to_assign;
+            new_entry->next = NULL;
+
+            if (prev) {
+                prev->next = new_entry;
+            } else {
+                scanner_symbols_list = new_entry;
+            }
+        }
 
         // Send symbols to scanner
         send_symbols_to_scanner(curr->conn, assigned_symbols, symbols_to_assign);
@@ -151,6 +162,7 @@ static void distribute_symbols_to_scanners() {
         LOG(LOG_INFO, "Assigned %d symbols to scanner: %s", symbols_to_assign, curr->client_id);
     }
 }
+
 
 
 /* ------------------------- HTTP Handlers ---------------------------------- */
@@ -224,7 +236,8 @@ static void handle_scanners(struct mg_connection *c) {
     struct json_object *root = json_object_new_object();
     struct json_object *scanners_array = json_object_new_array();
 
-    for (ScannerSymbols *s = scanner_symbols_list; s; s = s->next) {
+    ScannerSymbols *s = scanner_symbols_list;
+    while (s) {
         struct json_object *scanner_obj = json_object_new_object();
         json_object_object_add(scanner_obj, "id", json_object_new_string(s->client_id));
 
@@ -235,6 +248,7 @@ static void handle_scanners(struct mg_connection *c) {
 
         json_object_object_add(scanner_obj, "symbols", symbols_array);
         json_object_array_add(scanners_array, scanner_obj);
+        s = s->next;
     }
 
     json_object_object_add(root, "scanners", scanners_array);
@@ -242,6 +256,7 @@ static void handle_scanners(struct mg_connection *c) {
     mg_http_reply(c, 200, "Content-Type: application/json\r\n", "%s", response);
     json_object_put(root);
 }
+
 
 
 static void handle_pool(struct mg_connection *c) {
