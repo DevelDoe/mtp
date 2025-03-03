@@ -7,7 +7,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
-#include <windows.h>
 #ifdef _WIN32
 #include <windows.h>
 #define SLEEP_MS(ms) Sleep(ms)
