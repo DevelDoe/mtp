@@ -483,7 +483,7 @@ static int finnhub_callback(struct lws *wsi, enum lws_callback_reasons reason, v
 #define MIN_TRADE_VOLUME 1           // Ignore individual trades below this volume
 #define MIN_CUMULATIVE_VOLUME 50000  // Only trigger alerts if cumulative volume is above this threshold
 
-void *trade_processing_thread(LPVOID lpParam) {
+void *trade_processing_thread(void *lpParam) {
     ScannerState *state = (ScannerState *)lpParam;
 
     while (!state->shutdown_flag) {
@@ -660,7 +660,7 @@ void print_trade_history(ScannerState *state, const char *symbol) {
 }
 
 // Alert sending thread: reads alerts from the alert queue and sends them.
-void *alert_sending_thread(LPVOID lpParam) {
+void *alert_sending_thread(void *lpParam) {
     ScannerState *state = (ScannerState *)lpParam;
 
     while (!state->shutdown_flag) {
@@ -760,8 +760,8 @@ pthread_create(&hAlertThread, NULL, alert_sending_thread, (void *)&state);
         WaitForSingleObject(hTradeThread, INFINITE);
         WaitForSingleObject(hAlertThread, INFINITE);
 #else
-        pthread_join(hTradeThread, NULL);
-        pthread_join(hAlertThread, NULL);
+pthread_join(hTradeThread, NULL);
+pthread_join(hAlertThread, NULL);
 #endif
 
         lws_context_destroy(state.context);
