@@ -595,7 +595,7 @@ void *trade_processing_thread(void *lpParam) {
     return 0;
 }
 
-void *trade_cleaner_thread(LPVOID lpParam) {
+void *trade_cleaner_thread(void *lpParam) {
     ScannerState *state = (ScannerState *)lpParam;
 
     while (!state->shutdown_flag) {
