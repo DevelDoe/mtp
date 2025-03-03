@@ -326,15 +326,15 @@ static int finnhub_callback(struct lws *wsi, enum lws_callback_reasons reason, v
             break;
 
             case LWS_CALLBACK_CLIENT_RECEIVE: {
-                  LOG_DEBUG("Finnhub received data: %.*s\n", (int)len, (char *)in);
+                  DEBUG_PRINT("Finnhub received data: %.*s\n", (int)len, (char *)in);
                   // Ignore ping messages
                   if (len == 4 && strncmp((char *)in, "ping", 4) == 0) {
-                      LOG("Ignored ping message.\n");
+                      DEBUG_PRINT("Ignored ping message.\n");
                       break;
                   }
                   struct json_object *msg = json_tokener_parse((char *)in);
                   if (!msg) {
-                      LOG("Failed to parse JSON message: %.*s\n", (int)len, (char *)in);
+                      DEBUG_PRINT("Failed to parse JSON message: %.*s\n", (int)len, (char *)in);
                       break;
                   }
                   // If error type, log and ignore
@@ -342,7 +342,7 @@ static int finnhub_callback(struct lws *wsi, enum lws_callback_reasons reason, v
                   if (json_object_object_get_ex(msg, "type", &type_obj)) {
                       const char *msg_type = json_object_get_string(type_obj);
                       if (strcmp(msg_type, "error") == 0) {
-                          LOG("Error message received: %s\n", json_object_to_json_string(msg));
+                          DEBUG_PRINT("Error message received: %s\n", json_object_to_json_string(msg));
                           json_object_put(msg);
                           break;
                       }
@@ -350,7 +350,7 @@ static int finnhub_callback(struct lws *wsi, enum lws_callback_reasons reason, v
                   // Process the "data" array of trades
                   struct json_object *data_array;
                   if (!json_object_object_get_ex(msg, "data", &data_array) || json_object_get_type(data_array) != json_type_array) {
-                      LOG("JSON does not contain a valid 'data' array. Ignoring message.\n");
+                      DEBUG_PRINT("JSON does not contain a valid 'data' array. Ignoring message.\n");
                       json_object_put(msg);
                       break;
                   }
@@ -362,10 +362,10 @@ static int finnhub_callback(struct lws *wsi, enum lws_callback_reasons reason, v
                           const char *symbol = json_object_get_string(sym_obj);
                           double price = json_object_get_double(price_obj);
                           int volume = json_object_get_int(vol_obj);
-                          LOG_DEBUG("Received trade: symbol=%s, price=%.2f, volume=%d\n", symbol, price, volume);
+                          DEBUG_PRINT("Received trade: symbol=%s, price=%.2f, volume=%d\n", symbol, price, volume);
                           enqueue_trade(state, symbol, price, volume);
                       } else {
-                          LOG("Missing required trade data fields. Skipping entry.\n");
+                          DEBUG_PRINT("Missing required trade data fields. Skipping entry.\n");
                       }
                   }
                   json_object_put(msg);
