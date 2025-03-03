@@ -6,6 +6,7 @@ static const char *s_listen_url = "http://0.0.0.0:8000";
 
 static const char **stored_symbols = NULL;
 static int stored_symbols_count = 0;
+static ScannerSymbols *scanner_symbols_list = NULL;
 
 /* ------------------------ Function Prototypes ---------------------------- */
 static void distribute_symbols_to_scanners();
@@ -104,10 +105,15 @@ static void distribute_symbols_to_scanners() {
         return;
     }
 
-    int batch_size = stored_symbols_count / num_scanners;  // Divide symbols evenly
-    int extra = stored_symbols_count % num_scanners;       // Handle remainder symbols
+    // Clear previous assignments
+    while (scanner_symbols_list) {
+        ScannerSymbols *tmp = scanner_symbols_list;
+        scanner_symbols_list = scanner_symbols_list->next;
+        free(tmp);
+    }
 
-    LOG(LOG_INFO, "Distributing %d symbols across %d scanners", stored_symbols_count, num_scanners);
+    int batch_size = stored_symbols_count / num_scanners;
+    int extra = stored_symbols_count % num_scanners;
 
     int sent = 0;
     for (ClientNode *curr = client_map; curr; curr = curr->next) {
@@ -117,11 +123,20 @@ static void distribute_symbols_to_scanners() {
         if (extra > 0) extra--;
 
         send_symbols_to_scanner(curr->conn, &stored_symbols[sent], symbols_to_assign);
-        sent += symbols_to_assign;
 
+        // Store scanner-symbol assignment
+        ScannerSymbols *new_entry = malloc(sizeof(ScannerSymbols));
+        snprintf(new_entry->client_id, sizeof(new_entry->client_id), "%s", curr->client_id);
+        new_entry->symbols = &stored_symbols[sent]; // Point to assigned symbols
+        new_entry->symbol_count = symbols_to_assign;
+        new_entry->next = scanner_symbols_list;
+        scanner_symbols_list = new_entry;
+
+        sent += symbols_to_assign;
         LOG(LOG_INFO, "Assigned %d symbols to scanner: %s", symbols_to_assign, curr->client_id);
     }
 }
+
 
 
 /* ------------------------- HTTP Handlers ---------------------------------- */
@@ -143,8 +158,7 @@ static void handle_ws_upgrade(struct mg_connection *c, struct mg_http_message *h
   }
 }
 
-static void handle_scanner_update(struct mg_connection *c,
-                                  struct mg_http_message *hm) {
+static void handle_scanner_update(struct mg_connection *c, struct mg_http_message *hm) {
   LOG(LOG_INFO, "Received symbol update request");
 
   struct json_object *root = json_tokener_parse(hm->body.ptr);
@@ -196,30 +210,14 @@ static void handle_scanners(struct mg_connection *c) {
     struct json_object *root = json_object_new_object();
     struct json_object *scanners_array = json_object_new_array();
 
-    int sent = 0;
-    int num_scanners = 0;
-    for (ClientNode *curr = client_map; curr; curr = curr->next) {
-        if (!curr->is_scanner) continue;
-        num_scanners++;
-    }
-
-    int batch_size = stored_symbols_count / num_scanners;
-    int extra = stored_symbols_count % num_scanners;
-
-    for (ClientNode *curr = client_map; curr; curr = curr->next) {
-        if (!curr->is_scanner) continue;
-
+    for (ScannerSymbols *s = scanner_symbols_list; s; s = s->next) {
         struct json_object *scanner_obj = json_object_new_object();
-        json_object_object_add(scanner_obj, "id", json_object_new_string(curr->client_id));
+        json_object_object_add(scanner_obj, "id", json_object_new_string(s->client_id));
 
         struct json_object *symbols_array = json_object_new_array();
-        int symbols_to_assign = batch_size + (extra > 0 ? 1 : 0);
-        if (extra > 0) extra--;
-
-        for (int i = 0; i < symbols_to_assign; i++) {
-            json_object_array_add(symbols_array, json_object_new_string(stored_symbols[sent + i]));
+        for (int i = 0; i < s->symbol_count; i++) {
+            json_object_array_add(symbols_array, json_object_new_string(s->symbols[i]));
         }
-        sent += symbols_to_assign;
 
         json_object_object_add(scanner_obj, "symbols", symbols_array);
         json_object_array_add(scanners_array, scanner_obj);
@@ -227,7 +225,6 @@ static void handle_scanners(struct mg_connection *c) {
 
     json_object_object_add(root, "scanners", scanners_array);
     const char *response = json_object_to_json_string(root);
-
     mg_http_reply(c, 200, "Content-Type: application/json\r\n", "%s", response);
     json_object_put(root);
 }

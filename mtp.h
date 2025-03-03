@@ -93,6 +93,13 @@ typedef struct {
     int sub_index;
 } FinnhubSession;
 
+typedef struct ScannerSymbols {
+    char client_id[32];
+    const char **symbols;
+    int symbol_count;
+    struct ScannerSymbols *next;
+} ScannerSymbols;
+
 /* ---------------------- Function Declarations ---------------------- */
 
 // Utility functions
