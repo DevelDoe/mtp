@@ -483,7 +483,7 @@ static int finnhub_callback(struct lws *wsi, enum lws_callback_reasons reason, v
 #define MIN_TRADE_VOLUME 1           // Ignore individual trades below this volume
 #define MIN_CUMULATIVE_VOLUME 50000  // Only trigger alerts if cumulative volume is above this threshold
 
-DWORD WINAPI trade_processing_thread(LPVOID lpParam) {
+void *trade_processing_thread(LPVOID lpParam) {
     ScannerState *state = (ScannerState *)lpParam;
 
     while (!state->shutdown_flag) {
@@ -595,7 +595,7 @@ DWORD WINAPI trade_processing_thread(LPVOID lpParam) {
     return 0;
 }
 
-DWORD WINAPI trade_cleaner_thread(LPVOID lpParam) {
+void *trade_cleaner_thread(LPVOID lpParam) {
     ScannerState *state = (ScannerState *)lpParam;
 
     while (!state->shutdown_flag) {
@@ -660,7 +660,7 @@ void print_trade_history(ScannerState *state, const char *symbol) {
 }
 
 // Alert sending thread: reads alerts from the alert queue and sends them.
-DWORD WINAPI alert_sending_thread(LPVOID lpParam) {
+void *alert_sending_thread(LPVOID lpParam) {
     ScannerState *state = (ScannerState *)lpParam;
 
     while (!state->shutdown_flag) {
@@ -742,8 +742,9 @@ int main(int argc, char *argv[]) {
         HANDLE hAlertThread = CreateThread(NULL, 0, alert_sending_thread, &state, 0, NULL);
 #else
         pthread_t hTradeThread, hAlertThread;
-        pthread_create(&hTradeThread, NULL, trade_processing_thread, &state);
-        pthread_create(&hAlertThread, NULL, alert_sending_thread, &state);
+        pthread_create(&hTradeThread, NULL, trade_processing_thread, (void *)&state);
+pthread_create(&hAlertThread, NULL, alert_sending_thread, (void *)&state);
+
 #endif
 
         while (!shutdown_flag && !restart_flag) {
