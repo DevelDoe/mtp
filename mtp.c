@@ -58,8 +58,7 @@ static struct mg_connection *find_client(const char *client_id) {
 }
 
 /* ------------------------ WebSocket Utilities ---------------------------- */
-static void send_symbols_to_scanner(struct mg_connection *scanner,
-                                    const char **symbols, int num_symbols) {
+static void send_symbols_to_scanner(struct mg_connection *scanner, const char **symbols, int num_symbols) {
   // Create a JSON object containing the symbols
   struct json_object *root = json_object_new_object();
   struct json_object *symbols_array = json_object_new_array();
@@ -90,45 +89,40 @@ static void broadcast_alert(const char *alert_data) {
 }
 
 static void distribute_symbols_to_scanners() {
-  if (!stored_symbols || stored_symbols_count == 0) {
-    LOG(LOG_WARNING, "No stored symbols to distribute.");
-    return;
-  }
-
-  int total = stored_symbols_count;
-  int num_scanners = 0;
-
-  // Count active scanners
-  for (ClientNode *c = client_map; c; c = c->next) {
-    if (c->is_scanner)
-      num_scanners++;
-  }
-
-  if (num_scanners == 0) {
-    LOG(LOG_WARNING, "No scanners connected. Symbols not distributed.");
-    return;
-  }
-
-  int max_symbols = num_scanners * MAX_SYMBOLS;
-  int to_send = (total < max_symbols) ? total : max_symbols;
-
-  int sent = 0;
-  ClientNode *curr = client_map;
-  while (sent < to_send && curr) {
-    if (!curr->is_scanner) {
-      curr = curr->next;
-      continue;
+    if (!stored_symbols || stored_symbols_count == 0) {
+        LOG(LOG_WARNING, "No stored symbols to distribute.");
+        return;
     }
 
-    int batch_size =
-        (to_send - sent > MAX_SYMBOLS) ? MAX_SYMBOLS : (to_send - sent);
-    send_symbols_to_scanner(curr->conn, &stored_symbols[sent], batch_size);
-    sent += batch_size;
-    curr = curr->next;
-  }
+    int num_scanners = 0;
+    for (ClientNode *c = client_map; c; c = c->next) {
+        if (c->is_scanner) num_scanners++;
+    }
 
-  LOG(LOG_INFO, "Distributed %d symbols to %d scanners", sent, num_scanners);
+    if (num_scanners == 0) {
+        LOG(LOG_WARNING, "No scanners connected. Symbols not distributed.");
+        return;
+    }
+
+    int batch_size = stored_symbols_count / num_scanners;  // Divide symbols evenly
+    int extra = stored_symbols_count % num_scanners;       // Handle remainder symbols
+
+    LOG(LOG_INFO, "Distributing %d symbols across %d scanners", stored_symbols_count, num_scanners);
+
+    int sent = 0;
+    for (ClientNode *curr = client_map; curr; curr = curr->next) {
+        if (!curr->is_scanner) continue;
+
+        int symbols_to_assign = batch_size + (extra > 0 ? 1 : 0);
+        if (extra > 0) extra--;
+
+        send_symbols_to_scanner(curr->conn, &stored_symbols[sent], symbols_to_assign);
+        sent += symbols_to_assign;
+
+        LOG(LOG_INFO, "Assigned %d symbols to scanner: %s", symbols_to_assign, curr->client_id);
+    }
 }
+
 
 /* ------------------------- HTTP Handlers ---------------------------------- */
 static void handle_root(struct mg_connection *c) {
@@ -137,8 +131,7 @@ static void handle_root(struct mg_connection *c) {
                 "{\"status\": \"Server is running\"}");
 }
 
-static void handle_ws_upgrade(struct mg_connection *c,
-                              struct mg_http_message *hm) {
+static void handle_ws_upgrade(struct mg_connection *c, struct mg_http_message *hm) {
   printf("[SERVER] Upgrading connection to WebSocket\n");
 
   // Validate WebSocket handshake
@@ -200,33 +193,45 @@ static void handle_scanner_update(struct mg_connection *c,
 }
 
 static void handle_scanners(struct mg_connection *c) {
-  struct json_object *root = json_object_new_object();
-  struct json_object *scanners_array = json_object_new_array();
+    struct json_object *root = json_object_new_object();
+    struct json_object *scanners_array = json_object_new_array();
 
-  for (ClientNode *curr = client_map; curr; curr = curr->next) {
-    if (curr->is_scanner) {
-      struct json_object *scanner_obj = json_object_new_object();
-      json_object_object_add(scanner_obj, "id",
-                             json_object_new_string(curr->client_id));
-
-      // Since we don't track assigned symbols per scanner, we send all stored
-      // symbols for now
-      struct json_object *symbols_array = json_object_new_array();
-      for (int i = 0; i < stored_symbols_count; i++) {
-        json_object_array_add(symbols_array,
-                              json_object_new_string(stored_symbols[i]));
-      }
-      json_object_object_add(scanner_obj, "symbols", symbols_array);
-      json_object_array_add(scanners_array, scanner_obj);
+    int sent = 0;
+    int num_scanners = 0;
+    for (ClientNode *curr = client_map; curr; curr = curr->next) {
+        if (!curr->is_scanner) continue;
+        num_scanners++;
     }
-  }
 
-  json_object_object_add(root, "scanners", scanners_array);
-  const char *response = json_object_to_json_string(root);
+    int batch_size = stored_symbols_count / num_scanners;
+    int extra = stored_symbols_count % num_scanners;
 
-  mg_http_reply(c, 200, "Content-Type: application/json\r\n", "%s", response);
-  json_object_put(root);
+    for (ClientNode *curr = client_map; curr; curr = curr->next) {
+        if (!curr->is_scanner) continue;
+
+        struct json_object *scanner_obj = json_object_new_object();
+        json_object_object_add(scanner_obj, "id", json_object_new_string(curr->client_id));
+
+        struct json_object *symbols_array = json_object_new_array();
+        int symbols_to_assign = batch_size + (extra > 0 ? 1 : 0);
+        if (extra > 0) extra--;
+
+        for (int i = 0; i < symbols_to_assign; i++) {
+            json_object_array_add(symbols_array, json_object_new_string(stored_symbols[sent + i]));
+        }
+        sent += symbols_to_assign;
+
+        json_object_object_add(scanner_obj, "symbols", symbols_array);
+        json_object_array_add(scanners_array, scanner_obj);
+    }
+
+    json_object_object_add(root, "scanners", scanners_array);
+    const char *response = json_object_to_json_string(root);
+
+    mg_http_reply(c, 200, "Content-Type: application/json\r\n", "%s", response);
+    json_object_put(root);
 }
+
 
 static void handle_pool(struct mg_connection *c) {
   struct json_object *root = json_object_new_object();

@@ -84,7 +84,7 @@ Persistent=true
 WantedBy=timers.target
 ```
 
-// 3 Create a Service to Stop
+// 3 Create a Service to Stop~
  nano /etc/systemd/system/fmp-stop.service
 ```
 [Unit]
