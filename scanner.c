@@ -102,7 +102,6 @@ void cleanup_state(ScannerState *state) {
     pthread_cond_destroy(&state->alert_queue.cond);
 }
 /* ----------------------------- WebSocket Handlers ----------------------------- */
-/* ----------------------------- WebSocket Handlers ----------------------------- */
 static int handle_local_server_connection(ScannerState *state) {
     if (!state || !state->context) {
         LOG(LOG_ERR, "Invalid state or context when connecting to local server\n");
@@ -326,31 +325,52 @@ static int finnhub_callback(struct lws *wsi, enum lws_callback_reasons reason, v
             }
             break;
 
-        case LWS_CALLBACK_CLIENT_RECEIVE:
-            LOG(LOG_DEBUG, "Finnhub received data: %.*s\n", (int)len, (char *)in);
-
-            if (len == 4 && strncmp((char *)in, "ping", 4) == 0) {
-                LOG(LOG_DEBUG, "Ignored ping message.\n");
-                break;
-            }
-            struct json_object *msg = json_tokener_parse((char *)in);
-            if (!msg) {
-                LOG(LOG_ERR, "Failed to parse JSON message: %.*s\n", (int)len, (char *)in);
-                break;
-            }
-
-            struct json_object *type_obj;
-            if (json_object_object_get_ex(msg, "type", &type_obj)) {
-                const char *msg_type = json_object_get_string(type_obj);
-                if (strcmp(msg_type, "error") == 0) {
-                    LOG(LOG_ERR, "Error message received: %s\n", json_object_to_json_string(msg));
-                    json_object_put(msg);
-                    break;
-                }
-            }
-
-            json_object_put(msg);
-            break;
+            case LWS_CALLBACK_CLIENT_RECEIVE: {
+                  LOG_DEBUG("Finnhub received data: %.*s\n", (int)len, (char *)in);
+                  // Ignore ping messages
+                  if (len == 4 && strncmp((char *)in, "ping", 4) == 0) {
+                      LOG("Ignored ping message.\n");
+                      break;
+                  }
+                  struct json_object *msg = json_tokener_parse((char *)in);
+                  if (!msg) {
+                      LOG("Failed to parse JSON message: %.*s\n", (int)len, (char *)in);
+                      break;
+                  }
+                  // If error type, log and ignore
+                  struct json_object *type_obj;
+                  if (json_object_object_get_ex(msg, "type", &type_obj)) {
+                      const char *msg_type = json_object_get_string(type_obj);
+                      if (strcmp(msg_type, "error") == 0) {
+                          LOG("Error message received: %s\n", json_object_to_json_string(msg));
+                          json_object_put(msg);
+                          break;
+                      }
+                  }
+                  // Process the "data" array of trades
+                  struct json_object *data_array;
+                  if (!json_object_object_get_ex(msg, "data", &data_array) || json_object_get_type(data_array) != json_type_array) {
+                      LOG("JSON does not contain a valid 'data' array. Ignoring message.\n");
+                      json_object_put(msg);
+                      break;
+                  }
+                  int arr_len = json_object_array_length(data_array);
+                  for (int i = 0; i < arr_len; i++) {
+                      struct json_object *trade_obj = json_object_array_get_idx(data_array, i);
+                      struct json_object *sym_obj, *price_obj, *vol_obj;
+                      if (json_object_object_get_ex(trade_obj, "s", &sym_obj) && json_object_object_get_ex(trade_obj, "p", &price_obj) && json_object_object_get_ex(trade_obj, "v", &vol_obj)) {
+                          const char *symbol = json_object_get_string(sym_obj);
+                          double price = json_object_get_double(price_obj);
+                          int volume = json_object_get_int(vol_obj);
+                          LOG_DEBUG("Received trade: symbol=%s, price=%.2f, volume=%d\n", symbol, price, volume);
+                          enqueue_trade(state, symbol, price, volume);
+                      } else {
+                          LOG("Missing required trade data fields. Skipping entry.\n");
+                      }
+                  }
+                  json_object_put(msg);
+                  break;
+              }
 
         case LWS_CALLBACK_CLIENT_CONNECTION_ERROR:
             LOG(LOG_ERR, "Finnhub connection error: %s\n", in ? (char *)in : "Unknown error");
