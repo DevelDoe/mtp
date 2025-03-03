@@ -107,7 +107,7 @@ int main() {
 
     // Your filter parameters here
     const char *api_key = "RFWWfFzwRZJrDNSxzF4M64RKcuXq3T0O";
-    const char *market_cap_upper = "35000000";
+    const char *market_cap_upper = "30000000";
     const char *price_lower = "1";
     const char *price_upper = "7";
     const char *min_volume = "100000";
