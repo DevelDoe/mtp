@@ -110,7 +110,7 @@ int main() {
     const char *market_cap_upper = "40000000";
     const char *price_lower = "1";
     const char *price_upper = "10";
-    const char *min_volume = "75000";
+    const char *min_volume = "100000";
     const char *exchange = "NASDAQ";
     const char *trading = "true";
     const char *etf = "false";
