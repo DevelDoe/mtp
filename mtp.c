@@ -105,38 +105,52 @@ static void distribute_symbols_to_scanners() {
         return;
     }
 
-    // Clear previous assignments
-    while (scanner_symbols_list) {
-        ScannerSymbols *tmp = scanner_symbols_list;
-        scanner_symbols_list = scanner_symbols_list->next;
-        free(tmp);
-    }
+    LOG(LOG_INFO, "Distributing %d symbols across %d scanners", stored_symbols_count, num_scanners);
 
     int batch_size = stored_symbols_count / num_scanners;
     int extra = stored_symbols_count % num_scanners;
 
     int sent = 0;
+
+    // Free previous scanner assignments
+    while (scanner_symbols_list) {
+        ScannerSymbols *tmp = scanner_symbols_list;
+        scanner_symbols_list = scanner_symbols_list->next;
+        for (int i = 0; i < tmp->symbol_count; i++) {
+            free((char *)tmp->symbols[i]);
+        }
+        free(tmp->symbols);
+        free(tmp);
+    }
+
+    // Assign symbols to scanners
     for (ClientNode *curr = client_map; curr; curr = curr->next) {
         if (!curr->is_scanner) continue;
 
         int symbols_to_assign = batch_size + (extra > 0 ? 1 : 0);
         if (extra > 0) extra--;
 
-        send_symbols_to_scanner(curr->conn, &stored_symbols[sent], symbols_to_assign);
+        // Allocate memory for the assigned symbols
+        const char **assigned_symbols = malloc(symbols_to_assign * sizeof(const char *));
+        for (int i = 0; i < symbols_to_assign; i++) {
+            assigned_symbols[i] = strdup(stored_symbols[sent + i]); // Copy symbol names
+        }
 
         // Store scanner-symbol assignment
         ScannerSymbols *new_entry = malloc(sizeof(ScannerSymbols));
         snprintf(new_entry->client_id, sizeof(new_entry->client_id), "%s", curr->client_id);
-        new_entry->symbols = &stored_symbols[sent]; // Point to assigned symbols
+        new_entry->symbols = assigned_symbols;
         new_entry->symbol_count = symbols_to_assign;
         new_entry->next = scanner_symbols_list;
         scanner_symbols_list = new_entry;
+
+        // Send symbols to scanner
+        send_symbols_to_scanner(curr->conn, assigned_symbols, symbols_to_assign);
 
         sent += symbols_to_assign;
         LOG(LOG_INFO, "Assigned %d symbols to scanner: %s", symbols_to_assign, curr->client_id);
     }
 }
-
 
 
 /* ------------------------- HTTP Handlers ---------------------------------- */
