@@ -848,36 +848,50 @@ int main(int argc, char *argv[]) {
     handle_finnhub_connection(&state);
 
 #ifdef _WIN32
-    HANDLE hTradeThread =
+    HANDLE threads[3];
+
+    threads[0] =
         CreateThread(NULL, 0, trade_processing_thread, &state, 0, NULL);
-    HANDLE hAlertThread =
-        CreateThread(NULL, 0, alert_sending_thread, &state, 0, NULL);
-    HANDLE hCleanerThread =
-        CreateThread(NULL, 0, trade_cleaner_thread, &state, 0, NULL);
+    threads[1] = CreateThread(NULL, 0, alert_sending_thread, &state, 0, NULL);
+    threads[2] = CreateThread(NULL, 0, trade_cleaner_thread, &state, 0, NULL);
+
+    if (!threads[0] || !threads[1] || !threads[2]) {
+      LOG("Failed to create one or more threads\n");
+      cleanup_state(&state);
+      return -1;
+    }
 #else
-    pthread_t hTradeThread, hAlertThread, hCleanerThread;
-    pthread_create(&hTradeThread, NULL, trade_processing_thread, &state);
-    pthread_create(&hAlertThread, NULL, alert_sending_thread, &state);
-    pthread_create(&hCleanerThread, NULL, trade_cleaner_thread, &state);
+    pthread_t threads[3];
+
+    if (pthread_create(&threads[0], NULL, trade_processing_thread, &state) ||
+        pthread_create(&threads[1], NULL, alert_sending_thread, &state) ||
+        pthread_create(&threads[2], NULL, trade_cleaner_thread, &state)) {
+      LOG("Failed to create one or more threads\n");
+      cleanup_state(&state);
+      return -1;
+    }
 #endif
 
+    // WebSocket Event Loop
     while (!shutdown_flag && !restart_flag) {
       lws_service(state.context, 50);
       LOG_DEBUG("Running WebSocket event loop\n");
     }
 
+    // Signal shutdown
     state.shutdown_flag = 1;
     pthread_cond_broadcast(&state.trade_queue.cond);
     pthread_cond_broadcast(&state.alert_queue.cond);
 
 #ifdef _WIN32
-    WaitForSingleObject(hTradeThread, INFINITE);
-    WaitForSingleObject(hAlertThread, INFINITE);
-    WaitForSingleObject(hCleanerThread, INFINITE);
+    for (int i = 0; i < 3; i++) {
+      WaitForSingleObject(threads[i], INFINITE);
+      CloseHandle(threads[i]);
+    }
 #else
-    pthread_join(hTradeThread, NULL);
-    pthread_join(hAlertThread, NULL);
-    pthread_join(hCleanerThread, NULL);
+    for (int i = 0; i < 3; i++) {
+      pthread_join(threads[i], NULL);
+    }
 #endif
 
     lws_context_destroy(state.context);
