@@ -39,7 +39,7 @@ unsigned long get_current_time_ms() {
 #define DEBUG_MODE 1
 #define MAX_SYMBOLS 50
 #define PRICE_MOVEMENT 1.0  // 1% price movement
-#define DEBOUNCE_TIME 3000  // 3 seconds in milliseconds
+#define DEBOUNCE_TIME 5000  // 3 seconds in milliseconds
 #define MAX_TRADES 1000     // Upper limit for active trades to avoid memory overload
 #define LOCAL_ADDRESS "127.0.0.1"
 #define LOCAL_PORT 8000
