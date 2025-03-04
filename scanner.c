@@ -318,7 +318,7 @@ static int local_server_callback(struct lws *wsi, enum lws_callback_reasons reas
                 if (lws_write(wsi, p, msg_len, LWS_WRITE_TEXT) < 0)
                     LOG(LOG_ERR, "Failed to send registration message to local server\n");
                 else
-                    DEBUG_PRINT("Sent registration message: %s\n", register_msg);
+                    LOG_DEBUG("Sent registration message: %s\n", register_msg);
             }
             break;
 
@@ -351,7 +351,7 @@ static int local_server_callback(struct lws *wsi, enum lws_callback_reasons reas
                     memcpy(p, unsubscribe_msg, msg_len);
                     lws_write(state->wsi_finnhub, p, msg_len, LWS_WRITE_TEXT);
                   }
-                  DEBUG_PRINT("Unsubscribed from %d old symbols\n", old_num_symbols);
+                  LOG_DEBUG("Unsubscribed from %d old symbols\n", old_num_symbols);
                 }
 
                 // Free old symbols
@@ -396,7 +396,7 @@ static int local_server_callback(struct lws *wsi, enum lws_callback_reasons reas
                 }
 
                 pthread_mutex_unlock(&state->symbols_mutex);
-                DEBUG_PRINT("Now subscribing to %d symbols (preserved %d old entries)\n",
+                LOG_DEBUG("Now subscribing to %d symbols (preserved %d old entries)\n",
                 state->num_symbols, preserved_count);  // Now valid
 
                 // Trigger re-subscription on Finnhub
@@ -449,22 +449,22 @@ static int finnhub_callback(struct lws *wsi, enum lws_callback_reasons reason, v
                     LOG("Total symbols subscribed: %d\n", state->num_symbols);
                 }
 
-                DEBUG_PRINT("Subscribed to: %s\n", subscribe_msg);
+                LOG_DEBUG("Subscribed to: %s\n", subscribe_msg);
                 session->sub_index++;
                 if (session->sub_index < state->num_symbols) lws_callback_on_writable(wsi);
             }
             break;
 
             case LWS_CALLBACK_CLIENT_RECEIVE: {
-                  DEBUG_PRINT("Finnhub received data: %.*s\n", (int)len, (char *)in);
+                  LOG_DEBUG("Finnhub received data: %.*s\n", (int)len, (char *)in);
                   // Ignore ping messages
                   if (len == 4 && strncmp((char *)in, "ping", 4) == 0) {
-                      DEBUG_PRINT("Ignored ping message.\n");
+                      LOG_DEBUG("Ignored ping message.\n");
                       break;
                   }
                   struct json_object *msg = json_tokener_parse((char *)in);
                   if (!msg) {
-                      DEBUG_PRINT("Failed to parse JSON message: %.*s\n", (int)len, (char *)in);
+                      LOG_DEBUG("Failed to parse JSON message: %.*s\n", (int)len, (char *)in);
                       break;
                   }
                   // If error type, log and ignore
@@ -472,7 +472,7 @@ static int finnhub_callback(struct lws *wsi, enum lws_callback_reasons reason, v
                   if (json_object_object_get_ex(msg, "type", &type_obj)) {
                       const char *msg_type = json_object_get_string(type_obj);
                       if (strcmp(msg_type, "error") == 0) {
-                          DEBUG_PRINT("Error message received: %s\n", json_object_to_json_string(msg));
+                          LOG_DEBUG("Error message received: %s\n", json_object_to_json_string(msg));
                           json_object_put(msg);
                           break;
                       }
@@ -480,7 +480,7 @@ static int finnhub_callback(struct lws *wsi, enum lws_callback_reasons reason, v
                   // Process the "data" array of trades
                   struct json_object *data_array;
                   if (!json_object_object_get_ex(msg, "data", &data_array) || json_object_get_type(data_array) != json_type_array) {
-                      DEBUG_PRINT("JSON does not contain a valid 'data' array. Ignoring message.\n");
+                      LOG_DEBUG("JSON does not contain a valid 'data' array. Ignoring message.\n");
                       json_object_put(msg);
                       break;
                   }
@@ -492,10 +492,10 @@ static int finnhub_callback(struct lws *wsi, enum lws_callback_reasons reason, v
                           const char *symbol = json_object_get_string(sym_obj);
                           double price = json_object_get_double(price_obj);
                           int volume = json_object_get_int(vol_obj);
-                          DEBUG_PRINT("Received trade: symbol=%s, price=%.2f, volume=%d\n", symbol, price, volume);
+                          LOG_DEBUG("Received trade: symbol=%s, price=%.2f, volume=%d\n", symbol, price, volume);
                           enqueue_trade(state, symbol, price, volume);
                       } else {
-                          DEBUG_PRINT("Missing required trade data fields. Skipping entry.\n");
+                          LOG_DEBUG("Missing required trade data fields. Skipping entry.\n");
                       }
                   }
                   json_object_put(msg);
