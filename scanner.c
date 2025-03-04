@@ -43,7 +43,9 @@ unsigned long get_current_time_ms() {
 #define MAX_TRADES 1000     // Upper limit for active trades to avoid memory overload
 #define LOCAL_SERVER_URI "ws://192.168.1.17:8000/ws"
 #define FINNHUB_URI "wss://ws.finnhub.io/?token=your_token"
-#define MAX_QUEUE_SIZE 1024  // For both trade and alert queues
+#define MAX_QUEUE_SIZE 1024 // For both trade and alert queues
+#define MIN_TRADE_VOLUME 1  // Ignore individual trades below this volume
+#define MIN_CUMULATIVE_VOLUME 50000 // Only trigger alerts if cumulative volume is above this threshold
 
 /* ----------------------------- Helper Macros ------------------------------ */
 #define LOG(fmt, ...) printf("[%s] " fmt, __func__, ##__VA_ARGS__)
@@ -480,8 +482,6 @@ static int finnhub_callback(struct lws *wsi, enum lws_callback_reasons reason, v
 /* ----------------------------- Worker Threads ----------------------------- */
 
 /* ----------------------------- Configuration ------------------------------ */
-#define MIN_TRADE_VOLUME 1           // Ignore individual trades below this volume
-#define MIN_CUMULATIVE_VOLUME 50000  // Only trigger alerts if cumulative volume is above this threshold
 
 void *trade_processing_thread(void *lpParam) {
     ScannerState *state = (ScannerState *)lpParam;
