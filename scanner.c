@@ -95,6 +95,9 @@ typedef struct {
     int num_symbols;
     unsigned long last_alert_time[MAX_SYMBOLS];
 
+    // NEW: Store the last alerted price per symbol
+    double last_alert_price[MAX_SYMBOLS];
+
     // Trade storage (circular buffer for each symbol)
     struct {
         double price;
@@ -104,7 +107,7 @@ typedef struct {
 
     int trade_count[MAX_SYMBOLS];             // Tracks the number of stored trades per symbol
     int trade_head[MAX_SYMBOLS];              // Points to the oldest trade in the history
-    unsigned long total_volume[MAX_SYMBOLS];  // NEW: Tracks cumulative volume in the last 5 min
+    unsigned long total_volume[MAX_SYMBOLS];  // Tracks cumulative volume in the last 5 min
 
     struct lws *wsi_local;
     struct lws *wsi_finnhub;
@@ -118,6 +121,7 @@ typedef struct {
     char scanner_id[64];
 
 } ScannerState;
+
 
 // Session data for Finnhub connection
 typedef struct {
