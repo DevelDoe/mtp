@@ -570,7 +570,7 @@ void *trade_processing_thread(void *lpParam) {
                 alert.symbol_index = idx;
                 alert.change = change;
                 alert.price = trade.price;
-                alert.volume = trade.volume;
+                alert.volume = state->total_volume[idx];
 
                 pthread_mutex_lock(&state->alert_queue.mutex);
                 queue_push_alert(&state->alert_queue, &alert);
