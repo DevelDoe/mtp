@@ -306,7 +306,7 @@ static int local_server_callback(struct lws *wsi, enum lws_callback_reasons reas
 
     switch (reason) {
         case LWS_CALLBACK_CLIENT_ESTABLISHED:
-            LOG(LOG_NOTICE, "Connected to local server\n");
+            LOG("Connected to local server\n");
             state->wsi_local = wsi;
             {
                 char register_msg[128];
@@ -316,7 +316,7 @@ static int local_server_callback(struct lws *wsi, enum lws_callback_reasons reas
                 size_t msg_len = strlen(register_msg);
                 memcpy(p, register_msg, msg_len);
                 if (lws_write(wsi, p, msg_len, LWS_WRITE_TEXT) < 0)
-                    LOG(LOG_ERR, "Failed to send registration message to local server\n");
+                    LOG("Failed to send registration message to local server\n");
                 else
                     LOG_DEBUG("Sent registration message: %s\n", register_msg);
             }
