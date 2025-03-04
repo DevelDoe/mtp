@@ -220,7 +220,7 @@ static int handle_local_server_connection(ScannerState *state) {
 }
 static int handle_finnhub_connection(ScannerState *state) {
     if (!state || !state->context) {
-        LOG(LOG_ERR, "Invalid state or context when connecting to Finnhub\n");
+        LOG("Invalid state or context when connecting to Finnhub\n");
         return -1;
     }
 
@@ -236,12 +236,12 @@ static int handle_finnhub_connection(ScannerState *state) {
 
     state->wsi_finnhub = lws_client_connect_via_info(&ccinfo);
     if (!state->wsi_finnhub) {
-      LOG(LOG_ERR, "Failed to initiate Finnhub connection: host=%s, path=%s, port=%d, errno=%d (%s)\n",
+      LOG("Failed to initiate Finnhub connection: host=%s, path=%s, port=%d, errno=%d (%s)\n",
       FINNHUB_HOST, FINNHUB_PATH, ccinfo.port, errno, strerror(errno));
         return -1;
     }
 
-    LOG(LOG_NOTICE, "Finnhub connection initiated successfully\n");
+    LOG("Finnhub connection initiated successfully\n");
     return 0;
 }
 
