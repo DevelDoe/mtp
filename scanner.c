@@ -301,7 +301,6 @@ void enqueue_trade(ScannerState *state, const char *symbol, double price, int vo
 }
 
 /* ----------------------------- WebSocket Callbacks ----------------------------- */
-/* ----------------------------- WebSocket Callbacks ----------------------------- */
 static int local_server_callback(struct lws *wsi, enum lws_callback_reasons reason, void *user, void *in, size_t len) {
     ScannerState *state = (ScannerState *)lws_context_user(lws_get_context(wsi));
 
@@ -412,7 +411,7 @@ static int local_server_callback(struct lws *wsi, enum lws_callback_reasons reas
             }
 
         case LWS_CALLBACK_CLIENT_CLOSED:
-            LOG(LOG_NOTICE, "Local server connection closed, attempting to reconnect...\n");
+            LOG("Local server connection closed, attempting to reconnect...\n");
             state->wsi_local = NULL;
             handle_local_server_connection(state);
             break;
@@ -428,7 +427,7 @@ static int finnhub_callback(struct lws *wsi, enum lws_callback_reasons reason, v
 
     switch (reason) {
         case LWS_CALLBACK_CLIENT_ESTABLISHED:
-            LOG(LOG_NOTICE, "Connected to Finnhub\n");
+            LOG("Connected to Finnhub\n");
             lws_callback_on_writable(wsi);
             break;
 
@@ -447,7 +446,7 @@ static int finnhub_callback(struct lws *wsi, enum lws_callback_reasons reason, v
                 lws_write(wsi, p, msg_len, LWS_WRITE_TEXT);
 
                 if (session->sub_index == 0) {
-                    LOG(LOG_INFO, "Total symbols subscribed: %d\n", state->num_symbols);
+                    LOG("Total symbols subscribed: %d\n", state->num_symbols);
                 }
 
                 DEBUG_PRINT("Subscribed to: %s\n", subscribe_msg);
@@ -504,12 +503,12 @@ static int finnhub_callback(struct lws *wsi, enum lws_callback_reasons reason, v
               }
 
         case LWS_CALLBACK_CLIENT_CONNECTION_ERROR:
-            LOG(LOG_ERR, "Finnhub connection error: %s\n", in ? (char *)in : "Unknown error");
+            LOG("Finnhub connection error: %s\n", in ? (char *)in : "Unknown error");
             handle_finnhub_connection(state);
             break;
 
         case LWS_CALLBACK_CLOSED:
-            LOG(LOG_NOTICE, "Finnhub connection closed\n");
+            LOG("Finnhub connection closed\n");
             handle_finnhub_connection(state);
             break;
 
