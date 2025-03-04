@@ -196,7 +196,7 @@ static void cleanup_state(ScannerState *state) {
 /* ----------------------------- WebSocket Handlers ----------------------------- */
 static int handle_local_server_connection(ScannerState *state) {
     if (!state || !state->context) {
-        LOG(LOG_ERR, "Invalid state or context when connecting to local server\n");
+        LOG("Invalid state or context when connecting to local server\n");
         return -1;
     }
 
@@ -212,7 +212,7 @@ static int handle_local_server_connection(ScannerState *state) {
 
     state->wsi_local = lws_client_connect_via_info(&ccinfo);
     if (!state->wsi_local) {
-        LOG(LOG_ERR, "Failed to initiateo local server\n");
+        LOG("Failed to initiateo local server\n");
         return -1;
     }
 
