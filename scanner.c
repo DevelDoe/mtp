@@ -568,33 +568,23 @@ void *trade_processing_thread(void *lpParam) {
     double change = ((trade.price - old_price) / old_price) * 100.0;
 
     LOG_DEBUG("[trade_processing_thread] %s | Old Price: %.2f -> New Price: %.2f | Change: %.2f%%\n",
-              trade.symbol, old_price, trade.price, change);
+               trade.symbol, old_price, trade.price, change);
 
-    pthread_mutex_lock(&state->symbols_mutex);  // Ensure thread safety
-
-    // Check if the new price is valid for alerting based on the last alerted price
     int should_alert = 0;
 
-    if (change > 0) { // Price is going up
-        if (trade.price > state->last_alert_price[idx]) {
-            should_alert = 1;
-        } else {
-            LOG_DEBUG("[trade_processing_thread] Ignored alert for %s (Price didn't increase: %.2f ≤ %.2f)\n",
-                      trade.symbol, trade.price, state->last_alert_price[idx]);
-        }
-    } else if (change < 0) { // Price is going down
-        if (trade.price < state->last_alert_price[idx]) {
-            should_alert = 1;
-        } else {
-            LOG_DEBUG("[trade_processing_thread] Ignored alert for %s (Price didn't decrease: %.2f ≥ %.2f)\n",
-                      trade.symbol, trade.price, state->last_alert_price[idx]);
-        }
+    // Check price movement direction and compare with last alerted price
+    if (change > 0 && trade.price > state->last_alert_price[idx]) {
+        should_alert = 1;
+    } else if (change < 0 && trade.price < state->last_alert_price[idx]) {
+        should_alert = 1;
+    } else {
+        LOG_DEBUG("[trade_processing_thread] Ignored alert for %s | New Price: %.2f | Last Alert Price: %.2f\n",
+                   trade.symbol, trade.price, state->last_alert_price[idx]);
     }
 
-    // Check if price movement and cumulative volume exceed thresholds
-    if (should_alert && fabs(change) >= PRICE_MOVEMENT &&
-        (current_time - state->last_alert_time[idx] >= DEBOUNCE_TIME) &&
-        state->total_volume[idx] >= MIN_CUMULATIVE_VOLUME) {
+    if (should_alert && fabs(change) >= PRICE_MOVEMENT
+        && (current_time - state->last_alert_time[idx] >= DEBOUNCE_TIME)
+        && state->total_volume[idx] >= MIN_CUMULATIVE_VOLUME) {
 
         AlertMsg alert;
         alert.symbol_index = idx;
@@ -608,11 +598,13 @@ void *trade_processing_thread(void *lpParam) {
         pthread_mutex_unlock(&state->alert_queue.mutex);
 
         LOG_DEBUG("[trade_processing_thread] 🚨 ALERT TRIGGERED for %s | Change: %.2f%% | Cumulative Volume: %lu\n",
-                  trade.symbol, change, state->total_volume[idx]);
+                   trade.symbol, change, state->total_volume[idx]);
 
         state->last_alert_time[idx] = current_time;
-        state->last_alert_price[idx] = trade.price; // Store the last alerted price
-    } else {
+        state->last_alert_price[idx] = trade.price;
+    }
+}
+ else {
         if (state->total_volume[idx] < MIN_CUMULATIVE_VOLUME) {
             LOG_DEBUG("[trade_processing_thread] No alert for %s | Cumulative Volume: %lu (Below threshold: %d)\n",
                       trade.symbol, state->total_volume[idx], MIN_CUMULATIVE_VOLUME);
