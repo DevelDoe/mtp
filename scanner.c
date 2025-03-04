@@ -200,7 +200,7 @@ static int handle_local_server_connection(ScannerState *state) {
 
     struct lws_client_connect_info ccinfo = {0};
     ccinfo.context = state->context;
-    ccinfo.address = "172.232.155.62";
+    ccinfo.address = "127.0.0.1";
     ccinfo.port = 8000;
     ccinfo.path = "/ws";
     ccinfo.host = ccinfo.address;
