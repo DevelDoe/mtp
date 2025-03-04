@@ -852,12 +852,13 @@ int main(int argc, char *argv[]) {
         CreateThread(NULL, 0, trade_processing_thread, &state, 0, NULL);
     HANDLE hAlertThread =
         CreateThread(NULL, 0, alert_sending_thread, &state, 0, NULL);
+    HANDLE hCleanerThread =
+        CreateThread(NULL, 0, trade_cleaner_thread, &state, 0, NULL);
 #else
-    pthread_t hTradeThread, hAlertThread;
-    pthread_create(&hTradeThread, NULL, trade_processing_thread,
-                   (void *)&state);
-    pthread_create(&hAlertThread, NULL, alert_sending_thread, (void *)&state);
-
+    pthread_t hTradeThread, hAlertThread, hCleanerThread;
+    pthread_create(&hTradeThread, NULL, trade_processing_thread, &state);
+    pthread_create(&hAlertThread, NULL, alert_sending_thread, &state);
+    pthread_create(&hCleanerThread, NULL, trade_cleaner_thread, &state);
 #endif
 
     while (!shutdown_flag && !restart_flag) {
@@ -872,9 +873,11 @@ int main(int argc, char *argv[]) {
 #ifdef _WIN32
     WaitForSingleObject(hTradeThread, INFINITE);
     WaitForSingleObject(hAlertThread, INFINITE);
+    WaitForSingleObject(hCleanerThread, INFINITE);
 #else
     pthread_join(hTradeThread, NULL);
     pthread_join(hAlertThread, NULL);
+    pthread_join(hCleanerThread, NULL);
 #endif
 
     lws_context_destroy(state.context);
