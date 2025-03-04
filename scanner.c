@@ -46,7 +46,8 @@ unsigned long get_current_time_ms() {
 #define FINNHUB_HOST "ws.finnhub.io"
 #define FINNHUB_PATH "/?token=cv0q3q1r01qo8ssi98cgcv0q3q1r01qo8ssi98d0"
 #define MAX_QUEUE_SIZE 1024 // For both trade and alert queues
-#define MIN_TRADE_VOLUME 1  // Ignore individual trades below this volume
+
+#define MIN_TRADE_VOLUME 1000  // Ignore individual trades below this volume
 #define MIN_CUMULATIVE_VOLUME 50000 // Only trigger alerts if cumulative volume is above this threshold
 
 /* ----------------------------- Helper Macros ------------------------------ */
