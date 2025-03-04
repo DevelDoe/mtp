@@ -41,8 +41,10 @@ unsigned long get_current_time_ms() {
 #define PRICE_MOVEMENT 1.0  // 1% price movement
 #define DEBOUNCE_TIME 3000  // 3 seconds in milliseconds
 #define MAX_TRADES 1000     // Upper limit for active trades to avoid memory overload
-#define LOCAL_SERVER_URI "ws://192.168.1.17:8000/ws"
-#define FINNHUB_URI "wss://ws.finnhub.io/?token=your_token"
+#define LOCAL_ADDRESS "127.0.0.1"
+#define LOCAL_PORT 8000
+#define FINNHUB_HOST "ws.finnhub.io"
+#define FINNHUB_PATH "/?token=cv0q3q1r01qo8ssi98cgcv0q3q1r01qo8ssi98d0"
 #define MAX_QUEUE_SIZE 1024 // For both trade and alert queues
 #define MIN_TRADE_VOLUME 1  // Ignore individual trades below this volume
 #define MIN_CUMULATIVE_VOLUME 50000 // Only trigger alerts if cumulative volume is above this threshold
@@ -194,53 +196,52 @@ static void cleanup_state(ScannerState *state) {
 /* ----------------------------- WebSocket Handlers ----------------------------- */
 static int handle_local_server_connection(ScannerState *state) {
     if (!state || !state->context) {
-        LOG("Invalid state or context\n");
+        LOG(LOG_ERR, "Invalid state or context when connecting to local server\n");
         return -1;
     }
 
     struct lws_client_connect_info ccinfo = {0};
     ccinfo.context = state->context;
-    ccinfo.address = "127.0.0.1";
-    ccinfo.port = 8000;
+    ccinfo.address = LOCAL_ADDRESS;
+    ccinfo.port = LOCAL_PORT;
     ccinfo.path = "/ws";
-    ccinfo.host = ccinfo.address;
-    ccinfo.origin = ccinfo.address;
+    ccinfo.host = LOCAL_ADDRESS;
+    ccinfo.origin = LOCAL_ADDRESS;
     ccinfo.protocol = "local-server";
     ccinfo.ssl_connection = 0;
 
     state->wsi_local = lws_client_connect_via_info(&ccinfo);
     if (!state->wsi_local) {
-        LOG("Failed to connect to local server\n");
+        LOG(LOG_ERR, "Failed to initiateo local server\n");
         return -1;
     }
 
-    LOG("Local server connection initiated\n");
     return 0;
 }
-
 static int handle_finnhub_connection(ScannerState *state) {
     if (!state || !state->context) {
-        LOG("Invalid state or context\n");
+        LOG(LOG_ERR, "Invalid state or context when connecting to Finnhub\n");
         return -1;
     }
 
     struct lws_client_connect_info ccinfo = {0};
     ccinfo.context = state->context;
-    ccinfo.address = "ws.finnhub.io";
+    ccinfo.address = FINNHUB_HOST;
     ccinfo.port = 443;
-    ccinfo.path = "/?token=cv0q3q1r01qo8ssi98cgcv0q3q1r01qo8ssi98d0";  // Replace with your token
-    ccinfo.host = ccinfo.address;
-    ccinfo.origin = ccinfo.address;
+    ccinfo.path = FINNHUB_PATH;
+    ccinfo.host = FINNHUB_HOST;
+    ccinfo.origin = FINNHUB_HOST;
     ccinfo.protocol = "finnhub";
     ccinfo.ssl_connection = LCCSCF_USE_SSL;
 
     state->wsi_finnhub = lws_client_connect_via_info(&ccinfo);
     if (!state->wsi_finnhub) {
-        LOG("Failed to connect to Finnhub\n");
+      LOG(LOG_ERR, "Failed to initiate Finnhub connection: host=%s, path=%s, port=%d, errno=%d (%s)\n",
+      FINNHUB_HOST, FINNHUB_PATH, ccinfo.port, errno, strerror(errno));
         return -1;
     }
 
-    LOG("Finnhub connection initiated\n");
+    LOG(LOG_NOTICE, "Finnhub connection initiated successfully\n");
     return 0;
 }
 
