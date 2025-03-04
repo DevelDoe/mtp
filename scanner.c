@@ -604,9 +604,24 @@ void *trade_processing_thread(void *lpParam) {
       LOG_DEBUG("[trade_processing_thread] Comparison price for %s from 5 min "
                 "ago: %.2f (Timestamp: %llu)\n",
                 trade.symbol, old_price, oldest_time);
+    } else {
+      LOG_DEBUG("[trade_processing_thread] No past data for %s, skipping alert "
+                "check\n",
+                trade.symbol);
+      pthread_mutex_unlock(&state->symbols_mutex);
+      continue; // Skip alert processing
     }
 
-    if (old_price > 0) { // Ensure there's valid old data
+    // If this is the first recorded trade for this symbol, initialize
+    // last_alert_price
+    if (state->last_alert_price[idx] == 0.0) {
+      state->last_alert_price[idx] = trade.price;
+      LOG_DEBUG("[trade_processing_thread] Initialized last_alert_price for %s "
+                "to %.2f\n",
+                trade.symbol, trade.price);
+    }
+
+    if (old_price > 0) { // ✅ Now old_price is correctly retrieved
       double change = ((trade.price - old_price) / old_price) * 100.0;
 
       LOG_DEBUG("[trade_processing_thread] %s | Old Price: %.2f -> New Price: "
@@ -615,14 +630,10 @@ void *trade_processing_thread(void *lpParam) {
 
       int should_alert = 0;
 
-      if (change > 0 && trade.price > state->last_alert_price[idx]) {
+      // Allow first alert without requiring a price breakout
+      if ((change > 0 && trade.price > state->last_alert_price[idx]) ||
+          (change < 0 && trade.price < state->last_alert_price[idx])) {
         should_alert = 1;
-      } else if (change < 0 && trade.price < state->last_alert_price[idx]) {
-        should_alert = 1;
-      } else {
-        LOG_DEBUG("[trade_processing_thread] Ignored alert for %s | New Price: "
-                  "%.2f | Last Alert Price: %.2f\n",
-                  trade.symbol, trade.price, state->last_alert_price[idx]);
       }
 
       if (should_alert && fabs(change) >= PRICE_MOVEMENT &&
@@ -645,13 +656,10 @@ void *trade_processing_thread(void *lpParam) {
                   trade.symbol, change, state->total_volume[idx]);
 
         state->last_alert_time[idx] = current_time;
-        state->last_alert_price[idx] = trade.price;
+        state->last_alert_price[idx] = trade.price; // ✅ Update alert price
       }
-    } else {
-      LOG_DEBUG("[trade_processing_thread] Skipping alert check for %s - Not "
-                "enough data\n",
-                trade.symbol);
     }
+
     pthread_mutex_unlock(&state->symbols_mutex); // Ensure unlock happens here
   }
   return 0;
