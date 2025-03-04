@@ -626,24 +626,16 @@ void *trade_processing_thread(void *lpParam) {
                 state->trade_head[idx]);
     }
 
-    // Find the price 5 minutes ago
+    // ✅ Find the correct 5-min-ago price
     double old_price = 0.0;
     uint64_t oldest_time = 0;
-
-    if (state->trade_count[idx] > 0) {
-      int oldest_pos = state->trade_head[idx]; // Get oldest stored position
-      old_price = state->trade_history[idx][oldest_pos].price;
-      oldest_time = state->trade_history[idx][oldest_pos].timestamp;
-
-      LOG_DEBUG("[trade_processing_thread] Comparison price for %s from 5 min "
-                "ago: %.2f (Timestamp: %llu)\n",
-                trade.symbol, old_price, oldest_time);
-    } else {
-      LOG_DEBUG("[trade_processing_thread] No past data for %s, skipping alert "
-                "check\n",
-                trade.symbol);
-      pthread_mutex_unlock(&state->symbols_mutex);
-      continue; // Skip alert processing
+    for (int i = 0; i < state->trade_count[idx]; i++) {
+      int trade_pos = (state->trade_head[idx] + i) % MAX_TRADES;
+      if (state->trade_history[idx][trade_pos].timestamp >= five_min_ago) {
+        old_price = state->trade_history[idx][trade_pos].price;
+        oldest_time = state->trade_history[idx][trade_pos].timestamp;
+        break;
+      }
     }
 
     // If this is the first recorded trade for this symbol, initialize
