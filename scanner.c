@@ -656,7 +656,37 @@ void *trade_processing_thread(void *lpParam) {
                   trade.symbol, change, state->total_volume[idx]);
 
         state->last_alert_time[idx] = current_time;
-        state->last_alert_price[idx] = trade.price; // ✅ Update alert price
+        state->last_alert_price[idx] =
+            trade.price; // ✅ Store last alerted price
+
+      } else {
+        LOG_DEBUG(
+            "[trade_processing_thread] 🔍 ALERT **NOT** TRIGGERED for %s | "
+            "Change: %.2f%% | "
+            "Cumulative Volume: %lu / %d | Time Since Last Alert: %llu ms\n",
+            trade.symbol, change, state->total_volume[idx],
+            MIN_CUMULATIVE_VOLUME,
+            (current_time - state->last_alert_time[idx]));
+
+        // Additional logging for each failed condition:
+        if (!should_alert)
+          LOG_DEBUG(
+              "[trade_processing_thread] ❌ Reason: should_alert condition "
+              "failed. Last alert price: %.2f, Current price: %.2f\n",
+              state->last_alert_price[idx], trade.price);
+        if (fabs(change) < PRICE_MOVEMENT)
+          LOG_DEBUG("[trade_processing_thread] ❌ Reason: Change %.2f%% is "
+                    "below threshold %.2f%%\n",
+                    fabs(change), PRICE_MOVEMENT);
+        if ((current_time - state->last_alert_time[idx]) < DEBOUNCE_TIME)
+          LOG_DEBUG(
+              "[trade_processing_thread] ❌ Reason: Debounce time not met. "
+              "Time since last alert: %llu ms (Debounce required: %d ms)\n",
+              (current_time - state->last_alert_time[idx]), DEBOUNCE_TIME);
+        if (state->total_volume[idx] < MIN_CUMULATIVE_VOLUME)
+          LOG_DEBUG("[trade_processing_thread] ❌ Reason: Cumulative volume "
+                    "%lu is below threshold %d\n",
+                    state->total_volume[idx], MIN_CUMULATIVE_VOLUME);
       }
     }
 
