@@ -1,7 +1,7 @@
 #ifndef MTP_H
 #define MTP_H
 
-// scnner
+// scanner
 #include <json-c/json.h>
 #include <libwebsockets.h>
 #include <math.h>
@@ -91,9 +91,12 @@ typedef struct {
   char scanner_id[64];
 } ScannerState;
 
-typedef struct {
-  int sub_index;
-} FinnhubSession;
+typedef struct ScannerSymbols {
+  char client_id[32];          // Scanner ID
+  char **symbols;              // Array of assigned symbols
+  int symbol_count;            // Number of assigned symbols
+  struct ScannerSymbols *next; // Pointer to the next scanner in the list
+} ScannerSymbols;
 
 /* ---------------------- Function Declarations ---------------------- */
 
