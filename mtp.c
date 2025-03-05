@@ -122,6 +122,16 @@ static void distribute_symbols_to_scanners() {
 
   int sent = 0;
 
+  // ✅ CLEAR OLD SCANNER LIST FIRST
+  ScannerSymbols *temp;
+  while (scanner_symbols_list) {
+    temp = scanner_symbols_list;
+    scanner_symbols_list = scanner_symbols_list->next;
+    free(temp->symbols);
+    free(temp);
+  }
+  scanner_symbols_list = NULL; // Reset list
+
   for (ClientNode *curr = client_map; curr; curr = curr->next) {
     if (!curr->is_scanner)
       continue;
@@ -138,37 +148,14 @@ static void distribute_symbols_to_scanners() {
           strdup(stored_symbols[sent + i]); // Copy symbol names
     }
 
-    // Check if scanner already exists in the list
-    ScannerSymbols *scanner_entry = scanner_symbols_list;
-    ScannerSymbols *prev = NULL;
-    while (scanner_entry) {
-      if (strcmp(scanner_entry->client_id, curr->client_id) == 0) {
-        break; // Scanner already exists
-      }
-      prev = scanner_entry;
-      scanner_entry = scanner_entry->next;
-    }
-
-    if (scanner_entry) {
-      // Update existing scanner entry
-      free(scanner_entry->symbols); // Free old symbols
-      scanner_entry->symbols = assigned_symbols;
-      scanner_entry->symbol_count = symbols_to_assign;
-    } else {
-      // Add new scanner entry
-      ScannerSymbols *new_entry = malloc(sizeof(ScannerSymbols));
-      snprintf(new_entry->client_id, sizeof(new_entry->client_id), "%s",
-               curr->client_id);
-      new_entry->symbols = assigned_symbols;
-      new_entry->symbol_count = symbols_to_assign;
-      new_entry->next = NULL;
-
-      if (prev) {
-        prev->next = new_entry;
-      } else {
-        scanner_symbols_list = new_entry;
-      }
-    }
+    // ✅ REPLACE OLD SCANNER ENTRIES
+    ScannerSymbols *new_entry = malloc(sizeof(ScannerSymbols));
+    snprintf(new_entry->client_id, sizeof(new_entry->client_id), "%s",
+             curr->client_id);
+    new_entry->symbols = assigned_symbols;
+    new_entry->symbol_count = symbols_to_assign;
+    new_entry->next = scanner_symbols_list;
+    scanner_symbols_list = new_entry; // Add to the head of the list
 
     // Send symbols to scanner
     send_symbols_to_scanner(curr->conn, assigned_symbols, symbols_to_assign);
@@ -178,7 +165,6 @@ static void distribute_symbols_to_scanners() {
         curr->client_id);
   }
 }
-
 /* ------------------------- HTTP Handlers ---------------------------------- */
 static void handle_root(struct mg_connection *c) {
   LOG(LOG_INFO, "Received request for root endpoint");
