@@ -171,7 +171,8 @@ static void distribute_symbols_to_scanners() {
     }
 
     // Send symbols to scanner
-    send_symbols_to_scanner(curr->conn, assigned_symbols, symbols_to_assign);
+    send_symbols_to_scanner(curr->conn, (const char **)assigned_symbols,
+                            symbols_to_assign);
 
     sent += symbols_to_assign;
     LOG(LOG_INFO, "Assigned %d symbols to scanner: %s", symbols_to_assign,
