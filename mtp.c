@@ -131,8 +131,8 @@ static void distribute_symbols_to_scanners() {
       extra--;
 
     // Allocate memory for the assigned symbols
-    const char **assigned_symbols =
-        malloc(symbols_to_assign * sizeof(const char *));
+    char **assigned_symbols = malloc(symbols_to_assign * sizeof(char *));
+
     for (int i = 0; i < symbols_to_assign; i++) {
       assigned_symbols[i] =
           strdup(stored_symbols[sent + i]); // Copy symbol names
