@@ -35,14 +35,18 @@ static void add_client(const char *client_id, struct mg_connection *conn,
 
 static void remove_client(struct mg_connection *conn) {
   ClientNode **curr = &client_map;
-  bool was_scanner = false; // Track if a scanner was removed
+  bool was_scanner = false;
+  char removed_client_id[32] = {
+      0}; // Store ID for later removal from scanner_symbols_list
 
   while (*curr) {
     if ((*curr)->conn == conn) {
       ClientNode *tmp = *curr;
       *curr = (*curr)->next;
 
-      was_scanner = tmp->is_scanner; // ✅ Only trigger if scanner was removed
+      was_scanner = tmp->is_scanner;
+      strncpy(removed_client_id, tmp->client_id, sizeof(removed_client_id) - 1);
+
       LOG(LOG_INFO, "Removed client: %s (scanner: %d)", tmp->client_id,
           tmp->is_scanner);
 
@@ -52,9 +56,29 @@ static void remove_client(struct mg_connection *conn) {
     curr = &(*curr)->next;
   }
 
+  // ✅ Remove scanner from `scanner_symbols_list`
   if (was_scanner) {
-    distribute_symbols_to_scanners(); // ✅ Only redistribute if a scanner was
-                                      // removed
+    ScannerSymbols **scanner_curr = &scanner_symbols_list;
+    while (*scanner_curr) {
+      if (strcmp((*scanner_curr)->client_id, removed_client_id) == 0) {
+        ScannerSymbols *tmp = *scanner_curr;
+        *scanner_curr = (*scanner_curr)->next;
+
+        // Free allocated memory for symbols
+        for (int i = 0; i < tmp->symbol_count; i++) {
+          free(tmp->symbols[i]);
+        }
+        free(tmp->symbols);
+        free(tmp);
+
+        LOG(LOG_INFO, "Removed scanner entry: %s", removed_client_id);
+        break;
+      }
+      scanner_curr = &(*scanner_curr)->next;
+    }
+
+    // ✅ Reassign symbols to remaining scanners
+    distribute_symbols_to_scanners();
   }
 }
 
